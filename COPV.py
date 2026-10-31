@@ -79,7 +79,7 @@ def size_bottle(P_b0):
     else:
         endreached = False
     print(f"m_used: {m_used:.3f} kg in {time:.3f}s")
-    print(f"V_b: {1000*V_b:.3f}L, m_b: {m_b:.3f}kg, P_b0: {P_b0:.3f}, Min pressure reached: {endreached}")
+    print(f"V_b: {1000*V_b:.3f}L, m_b: {m_b:.3f}kg, P_b0: {P_b0:.3f} Pa, Min pressure reached: {endreached}")
     print(f"LOx max m dot: {max(mdots_LOx):.3f}kg/s @ {(mdots_LOx.index(max(mdots_LOx))+1)*dt:.3f}s")
     print(f"IPA max m dot: {max(mdots_IPA):.3f}kg/s @ {(mdots_IPA.index(max(mdots_IPA))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
@@ -111,7 +111,7 @@ ax.plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
 csvname = input("CSV name: ")
 if not csvname.endswith(".csv"):
     csvname += ".csv"
-with open("copv_sweep.csv", "w", newline="") as f:
+with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["P_b0_psi", "V_b_L", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
                      "mdot_total_max_kg_s", "min_pressure_reached"])
