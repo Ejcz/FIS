@@ -11,12 +11,18 @@ fig, ax = plt.subplots()
 ax.set_xlabel("Fill pressure (psi)")
 ax.set_ylabel("Bottle volume (L)")
 ax.grid(True)
+fig2, ax2 = plt.subplots()
+ax2.set_ylabel("End temperature (K)")
+ax2.set_xlabel("Bottle volume (L)")
+ax2.grid(True)
 colors = []
 mdots = []
 fill_masses = []
 T_b1s = []
 P_b1s = []
 press_masses = []
+T_fs = []
+Tcolors = []
 
 def size_bottle(P_b0): #P_b0 = before prepressurization
     #constants
@@ -79,7 +85,7 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
         
         while (time <= depl_time):
             h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-            T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks
+            T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks. check this at the end? come back here
             rho_in = propssi("D", "P", P_t, "T", T_in, "nitrogen") #rho GN2 going into tanks
             
             mdot_LOx = Vdot_LOx * CF * rho_in
@@ -100,13 +106,14 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
         endreached = True
     else:
         endreached = False
+    T_f = propssi("T", "S", S, "D", rho_b, "nitrogen")
     print(f"m_used: {m_used:.3f} kg in {time:.3f}s")
-    print(f"V_b: {1000*V_b:.2f}L, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, Min pressure reached: {endreached}")
+    print(f"V_b: {1000*V_b:.2f}L, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, T_f: {T_f:.0f}\nMin pressure reached: {endreached}")
     print(f"LOx max m dot: {max(mdots_LOx):.3f}kg/s @ {(mdots_LOx.index(max(mdots_LOx))+1)*dt:.3f}s")
     print(f"IPA max m dot: {max(mdots_IPA):.3f}kg/s @ {(mdots_IPA.index(max(mdots_IPA))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
     print("---------------------------------------------------------------------------------------")
-    return V_b, max(mdots_LOx), max(mdots_IPA), max(mdots_total), endreached, rho_b0*V_b, P_b1, T_b1, m_pres
+    return V_b, max(mdots_LOx), max(mdots_IPA), max(mdots_total), endreached, rho_b0*V_b, P_b1, T_b1, m_pres, T_f
 
 
 def tryP_b0(P_b0):
@@ -114,45 +121,62 @@ def tryP_b0(P_b0):
     x.append(P_b0/6894.757293) #psi
     y.append(1000*output[0]) #L
     mdots.append((output[1], output[2], output[3]))
-    fill_masses.append(output[5])
-    press_masses.append(output[8])
-    P_b1s.append(output[6]/6894.757293) #psi
-    T_b1s.append(output[7])
     if output[4] == True:
         colors.append("blue")
     else:
         colors.append("red")
+    fill_masses.append(output[5])
+    press_masses.append(output[8])
+    P_b1s.append(output[6]/6894.757293) #psi
+    T_b1s.append(output[7])
+    T_fs.append(output[9])
+    if output[9] > 215.15:
+        Tcolors.append("blue")
+    else:
+        Tcolors.append("red")
 
-P_bstart = 4000*6894.757293 #Pa, full fill pressure
-while P_bstart < 6500*6894.757293: #6500 psi
+P_bstart = 3500*6894.757293 #Pa, full fill pressure
+while P_bstart <= 6500*6894.757293: #6500 psi, sweep end
     tryP_b0(P_bstart)
     P_bstart += 20*6894.757293 #20 psi
 
-points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses), key = lambda p: p[0])
-sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses = zip(*points)
+points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses, T_fs, Tcolors), key = lambda p: p[0])
+sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors = zip(*points)
 ax.plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
+ax2.plot(sorted_y, sorted_Tfs, color = "gray", linestyle = "-") #is this right
 
 csvname = input("CSV name: ")
 if not csvname.endswith(".csv"):
     csvname += ".csv"
 with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
-    writer.writerow(["P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
-                     "mdot_total_max_kg_s", "min_pressure_reached"])
-    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm in zip(sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses):
-        writer.writerow([px, P1, vy, T1, fm, pm, lox, ipa, tot, col == "blue"])
+    writer.writerow(["P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
+                     "mdot_total_max_kg_s", "min_pressure_reached", "T_f_ok"])
+    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, Tc in zip(sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors):
+        writer.writerow([px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, col == "blue", Tc == "blue"])
 
 sc = ax.scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
-cursor = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
-@cursor.connect("add")
+sc2 = ax2.scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
+cursor1 = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
+@cursor1.connect("add")
 def on_add(sel):
     LOx, IPA, total = sorted_mdots[sel.index]
     P = sorted_x[sel.index]
     P1 = sorted_Pb1s[sel.index]
     V = sorted_y[sel.index]
     T1 = sorted_Tb1s[sel.index]
+    TF = sorted_Tfs[sel.index]
     FM = sorted_fill_masses[sel.index]
     PM = sorted_press_masses[sel.index]
-    sel.annotation.set_text(f"{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total")
+    sel.annotation.set_text(f"{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K burn end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total")
     sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+
+cursor2 = mplcursors.cursor(sc2, hover=mplcursors.HoverMode.Transient)
+@cursor2.connect("add")
+def on_add(sel):
+    V = sorted_y[sel.index]
+    TF = sorted_Tfs[sel.index]
+    sel.annotation.set_text(f"{V:.2f} L tank\n{TF:.3f}K final temp")
+    sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+
 plt.show()
