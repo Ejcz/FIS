@@ -66,10 +66,10 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
         rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
         rho_end = propssi("D", "P", P_tmin, "S", S, "nitrogen") #kg/m^3
         V_b = m_usedguess/(rho_b0-rho_end) #m^3, guess bottle volume based on m_used
-        if V_b < 13:
+        if V_b < 0.013:
             SA = SA_Vsmall*V_b
             m_COPV = m_COPVsmall
-        elif V_b > 13:
+        elif V_b > 0.013:
             SA = SA_Vbig*V_b
             m_COPV = m_COPVbig
         C_p = 950 #J/kgK, is a ballpark. come back here
