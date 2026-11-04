@@ -22,6 +22,7 @@ P_b1s = []
 press_masses = []
 T_fs = []
 Tcolors = []
+all_mdots = []
 
 def size_bottle(P_b0): #P_b0 = before prepressurization
     #constants
@@ -133,7 +134,7 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
     print(f"IPA max m dot: {max(mdots_IPA):.3f}kg/s @ {(mdots_IPA.index(max(mdots_IPA))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
     print("---------------------------------------------------------------------------------------")
-    return V_b, max(mdots_LOx), max(mdots_IPA), max(mdots_total), endreached, rho_b0*V_b, P_b1, T_b1, m_pres, T_f, T_w
+    return V_b, max(mdots_LOx), max(mdots_IPA), max(mdots_total), endreached, rho_b0*V_b, P_b1, T_b1, m_pres, T_f, T_w, mdots_total
 
 
 def tryP_b0(P_b0):
@@ -154,14 +155,15 @@ def tryP_b0(P_b0):
         Tcolors.append("blue")
     else:
         Tcolors.append("red")
+    all_mdots.append(output[11])
 
 P_bstart = 3000*6894.757293 #Pa, full fill pressure
 while P_bstart <= 6500*6894.757293: #6500 psi, sweep end
     tryP_b0(P_bstart)
     P_bstart += 20*6894.757293 #20 psi
 
-points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses, T_fs, Tcolors), key = lambda p: p[0])
-sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors = zip(*points)
+points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses, T_fs, Tcolors, all_mdots), key = lambda p: p[0])
+sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots = zip(*points)
 ax[0].plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
 ax[1].plot(sorted_y, sorted_Tfs, color = "gray", linestyle = "-") #is this right
 
@@ -171,9 +173,9 @@ if not csvname.endswith(".csv"):
 with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
-                     "mdot_total_max_kg_s", "min_pressure_reached", "T_f_ok"])
-    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, Tc in zip(sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors):
-        writer.writerow([px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, col == "blue", Tc == "blue"])
+                     "mdot_total_max_kg_s", "all_mdots_kg_s", "min_pressure_reached", "T_f_ok"])
+    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, Tc, amd in zip(sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots):
+        writer.writerow([px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, amd, col == "blue", Tc == "blue"])
 
 sc = ax[0].scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
 sc2 = ax[1].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
