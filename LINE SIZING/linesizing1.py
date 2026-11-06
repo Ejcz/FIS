@@ -6,7 +6,7 @@ import ast
 
 
 P_set = 550*6894.757 #reg setpoint
-P_f = 1.1*P_set
+P_f = 1.1*P_set #overpressure, less conservative than P_set tho
 dt = 0.05 #s
 
 S_y = 25000*6894.757 #yield strength
@@ -64,12 +64,12 @@ while True:
     while row.isdigit() == False:
         row = input("Row #: ")
     row = int(row)-1
-    mdots = ast.literal_eval(readCSV(filename, row, "all_mdots_kg_s")) #COME BACK HERE, ACTUALLY ADD TO COPV
+    mdots = ast.literal_eval(readCSV(filename, row, "all_mdots_kg_s"))
     T_b1 = float(readCSV(filename, row, "T_b1_K"))
     P_b0 = float(readCSV(filename, row, "P_b0_psi"))*6894.757
     P_b1 = float(readCSV(filename, row, "P_b1_psi"))*6894.757
     V_b = float(readCSV(filename, row, "V_b_L"))/1000
-    S_b0 = propssi("S", "P", P_b1, "T", T_b1, "nitrogen") #post prepressurization, from COPV.py
+    S_b0 = propssi("S", "P", P_b1, "T", T_b1, "nitrogen")
     m_b = float(readCSV(filename, row, "fill_mass_kg")) - float(readCSV(filename, row, "press_mass_kg"))
     
     rhocheck = propssi("D", "P", P_b1, "T", T_b1, "nitrogen")
@@ -90,7 +90,7 @@ while True:
         upmachs.append(calcMach(P_bot, h_0, S_b0, mdot, area))
 
         #downstream
-        S_down = propssi("S", "HMASS", h_0, "P", P_set, "nitrogen")
+        S_down = propssi("S", "HMASS", h_0, "P", P_set, "nitrogen") #no fanno flow btw. come back here
         downmachs.append(calcMach(P_set, h_0, S_down, mdot, area))
         #rho_d = propssi("D", "P", P_set, "T", , "nitrogen")
         
