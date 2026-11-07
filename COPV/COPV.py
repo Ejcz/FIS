@@ -20,6 +20,7 @@ ax[1,0].grid(True)
 ax[0,1].set_xlabel("Rated pressure (psi)")
 ax[0,1].set_ylabel("Bottle volume (L)")
 ax[0,1].grid(True)
+ax[0,1].set_title("which copvs r ok") #adjust: graph title
 colors = []
 mdots = []
 mdots1 = []
@@ -53,11 +54,11 @@ mdot_IPA = 0.932 #kg/s
 m_IPA = 9.3/2 #kg
 P_t = 3548704 #Pa, postreg P
 P_tmin = 6894757.293 #Pa, min P into reg
-T_amb = 305 #K adjust: ambient temperature
+T_amb = 275 #K adjust: ambient temperature
 V_uLOx = 0.00340 #m^3
 V_uIPA = 0.00307 #m^3
 V_utotal = 0.00699 #m^3
-T_b0 = 305 #K adjust: initial bottle temperature
+T_b0 = 275 #K adjust: initial bottle temperature
 dt = 0.05 #s
 depl_time = max(m_LOx/mdot_LOx, m_IPA/mdot_IPA) #s
 
@@ -103,20 +104,27 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
         rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
         rho_end = propssi("D", "P", P_tmin, "S", S, "nitrogen") #kg/m^3
         V_b = m_usedguess/(rho_b0-rho_end) #m^3, guess bottle volume based on m_used
-        rho_b1 = rho_b0-m_pres/V_b
-        u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen")
-        u_b1 = propssi("UMASS", "S", S, "D", rho_b1, "nitrogen")
-        h_in = V_b*(rho_b0*u_b0-rho_b1*u_b1)/m_pres
+        #adjust: for pressurization from COPV
+        #rho_b1 = rho_b0-m_pres/V_b
+        #u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen")
+        #u_b1 = propssi("UMASS", "S", S, "D", rho_b1, "nitrogen")
+        #h_in = V_b*(rho_b0*u_b0-rho_b1*u_b1)/m_pres
 
         # m_presLOx = fill_mass(V_uLOx, h_in) #no line volume COME BACK HERE
         # m_presIPA = fill_mass(V_uIPA, h_in)
         # m_pres = m_presLOx * 1.5 + m_presIPA #add a check on this? come back here, kinda sketch
-        m_pres = fill_mass(V_utotal, h_in) #can't account for CF_pp of LOx with this
+        #m_pres = fill_mass(V_utotal, h_in) #can't account for CF_pp of LOx with this
 
-        rho_b = rho_b0-(m_used+m_pres)/V_b #need to recalculate these after m_pres calc
-        rho_b1 = rho_b0-m_pres/V_b #these are for the start of burn btw
+        #rho_b = rho_b0-(m_used+m_pres)/V_b #need to recalculate these after m_pres calc
+        #rho_b1 = rho_b0-m_pres/V_b #these are for the start of burn btw
+
+        #adjust: pressurization from K bottle
+        rho_b1 = rho_b0
+        rho_b = rho_b0
+        h_in = propssi("HMASS","D", rho_b1, "T", T_b0, "nitrogen")
         P_b1 = propssi("P", "D", rho_b1, "S", S, "nitrogen")
         T_b1 = propssi("T", "P", P_b1, "D", rho_b1, "nitrogen")
+        m_pres = fill_mass(V_utotal, h_in) #can't account for CF_pp of LOx with this
         
         while (time <= depl_time):
             h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
@@ -131,12 +139,15 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
             mdots_total.append(mdot_total)
 
             m_used += mdot_total * dt
-            rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
+            #rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
+            rho_b = rho_b0-m_used/V_b
             P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
             T_b = propssi("T", "S", S, "D", rho_b, "nitrogen")
             time += dt
-        error = abs(m_usedguess-m_used-m_pres)
-        m_usedguess = m_used+m_pres
+        #error = abs(m_usedguess-m_used-m_pres)
+        #m_usedguess = m_used+m_pres
+        error = abs(m_usedguess-m_used)
+        m_usedguess = m_used
 
     if abs(P_b-P_tmin) <= 5*6894.757: #5 psi
         endreached = True
@@ -200,8 +211,10 @@ def use_bottle(P_b0, V_b):
         if done:
             break
 
-    rho_b = rho_b0-(m_used+m_pres)/V_b #need to recalculate these after m_pres calc
-    rho_b1 = rho_b0-m_pres/V_b #these are for the start of burn btw
+    #rho_b = rho_b0-(m_used+m_pres)/V_b #need to recalculate these after m_pres calc
+    #rho_b1 = rho_b0-m_pres/V_b #these are for the start of burn btw
+    rho_b = rho_b0
+    rho_b1 = rho_b0
     P_b1 = propssi("P", "D", rho_b1, "S", S, "nitrogen")
     T_b1 = propssi("T", "P", P_b1, "D", rho_b1, "nitrogen")
 
@@ -221,7 +234,8 @@ def use_bottle(P_b0, V_b):
         mdots_total.append(mdot_total)
 
         m_used += mdot_total * dt
-        rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
+        #rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
+        rho_b = rho_b0-m_used/V_b
         P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
         T_b = propssi("T", "S", S, "D", rho_b, "nitrogen")
         time += dt
@@ -254,7 +268,7 @@ def usebottle(P_b0, V_b, partnum, OD):
     all_mdots1.append(output[10])
     expl_times.append(output[11])
     part_nums.append(partnum)
-    COPV_ODs.append(OD)
+    COPV_ODs.append(float(OD))
 
 
 P_bstart = 3000*6894.757293 #Pa, full fill pressure
@@ -292,7 +306,8 @@ with open(csvname, "w", newline="") as f:
 sc = ax[0,0].scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
 sc1 = ax[1,0].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
 
-m_total = [mu + mp for mu, mp in zip(sorted_m_useds, sorted_press_masses)]
+#m_total = [mu + mp for mu, mp in zip(sorted_m_useds, sorted_press_masses)]
+m_total = [mu for mu in sorted_m_useds]
 P_grid = np.linspace(min(sorted_x), max(sorted_x), 80)
 V_grid = np.linspace(min(sorted_y)*0.8, 25, 80)
 T_grid = np.full((len(V_grid), len(P_grid)), np.nan)
@@ -352,7 +367,7 @@ def on_add(sel):
     PM = sorted_press_masses1[sel.index]
     EX = sorted_excesses[sel.index]
     T = sorted_expl_times[sel.index]
-    sel.annotation.set_text(f"{name}\n{OD:.3f} OD\n{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K burn end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total\n{T}s explulsion time\n{EX:.3f}kg excess mass")
+    sel.annotation.set_text(f"{name} {OD} in OD\n{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K burn end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total\n{T:.3f}s expulsion time\n{EX:.3f}kg excess mass")
     sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
 
 
