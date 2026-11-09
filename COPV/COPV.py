@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import mplcursors
 import csv
 
+#come back here: debug the end temperature or contour being weird
 plt.close()
 x = []
 y = []
@@ -38,11 +39,9 @@ Tcolors = []
 Tcolors1 = []
 all_mdots = []
 all_mdots1 = []
-excesses = []
 expl_times = []
 part_nums = []
 COPV_ODs = []
-T_fburns = []
 
 #constants/variables
 Vdot_LOx = 0.00115512708 #m^3/s, max
@@ -54,11 +53,11 @@ mdot_IPA = 0.932 #kg/s
 m_IPA = 9.3 #kg
 P_t = 3548704 #Pa, postreg P
 P_tmin = 6894757.293 #Pa, min P into reg
-T_amb = 275 #K adjust: ambient temperature
+T_amb = 305 #K adjust: ambient temperature
 V_uLOx = 0.00340 #m^3
 V_uIPA = 0.00307 #m^3
 V_utotal = 0.00699 #m^3
-T_b0 = 275 #K adjust: initial bottle temperature
+T_b0 = 305 #K adjust: initial bottle temperature
 dt = 0.05 #s
 depl_time = max(m_LOx/mdot_LOx, m_IPA/mdot_IPA) #s
 
@@ -178,16 +177,27 @@ def tryP_b0(P_b0):
     all_mdots.append(output[11])
     m_useds.append(output[12])
 
-def use_bottle(P_b0, V_b):
+def use_bottle(V_b): #come back here
     time = 0 #s
     m_used = 0 #kg
     m_pres = 0.2641458904 #kg, initial guess
-    m_excess = 0 #kg
-    m_expl = 0
     T_w = 300 #k
     mdots_LOx1 = []
     mdots_IPA1 = []
     mdots_total1 = []
+
+    # def T_end(P_fill): come back here, come back to this
+    #     S = propssi("S", "P", P_fill, "T", T_b0, "nitrogen")
+    #     return propssi("T", "S", S, "P", P_tmin, "nitrogen")
+
+    # def f(P_fill):
+    #     return T_end(P_fill) - 215.15 #K
+
+    # P_low = P_tmin*1.01
+    # P_high = 5000*6894.757
+    # P_b0 = optimize.brentq(f, P_low, P_high)
+
+
     S = propssi("S", "T", T_b0, "P", P_b0, "nitrogen") #J/kgK, flow assumed to be isentropic so specific S stays constant
     rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
     rho_end = propssi("D", "P", P_tmin, "S", S, "nitrogen") #kg/m^3
@@ -213,9 +223,6 @@ def use_bottle(P_b0, V_b):
 
     P_b = P_b1
     while P_b > P_tmin : #come back here. need to figure out how to properly model m dot for only LOx expulsion
-        if time <= depl_time:
-            m_depl = rho_b*V_b
-            T_fburn = propssi("T", "S", S, "D", rho_b, "nitrogen")
         h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
         T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks. check this at the end? come back here
         rho_in = propssi("D", "P", P_t, "T", T_in, "nitrogen") #rho GN2 going into tanks
@@ -233,40 +240,37 @@ def use_bottle(P_b0, V_b):
         T_b = propssi("T", "S", S, "D", rho_b, "nitrogen")
         time += dt
     T_f = propssi("T", "S", S, "D", rho_b, "nitrogen")
-    m_excess = m_depl - rho_end * V_b
 
     print(f"m_used: {m_used:.3f} kg in {time:.3f}s")
-    print(f"V_b: {1000*V_b:.2f}L, T_w: {T_w:.0f}K, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, T_fburn: {T_fburn:.0f} T_f: {T_f:.0f}")
+    print(f"V_b: {1000*V_b:.2f}L, T_w: {T_w:.0f}K, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, T_f: {T_f:.0f}")
     print(f"LOx max m dot: {max(mdots_LOx1):.3f}kg/s @ {(mdots_LOx1.index(max(mdots_LOx1))+1)*dt:.3f}s")
     print(f"IPA max m dot: {max(mdots_IPA1):.3f}kg/s @ {(mdots_IPA1.index(max(mdots_IPA1))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total1):.3f}kg/s @ {(mdots_total1.index(max(mdots_total1))+1)*dt:.3f}s")
     print("---------------------------------------------------------------------------------------")
-    return max(mdots_LOx1), max(mdots_IPA1), max(mdots_total1), m_excess, rho_b0*V_b, P_b1, T_b1, m_pres, T_f, T_w, mdots_total1, time, T_fburn
+    return max(mdots_LOx1), max(mdots_IPA1), max(mdots_total1), rho_b0*V_b, P_b1, T_b1, m_pres, T_f, T_w, mdots_total1, time
 
 def usebottle(P_b0, V_b, partnum, OD):
-    output = use_bottle(P_b0, V_b)
+    output = use_bottle(V_b)
     x1.append(P_b0/6894.757293) #psi
     y1.append(1000*V_b) #L
     mdots1.append((output[0], output[1], output[2]))
-    excesses.append(output[3])
-    fill_masses1.append(output[4])
-    press_masses1.append(output[7])
-    P_b1s1.append(output[5]/6894.757293) #psi
-    T_b1s1.append(output[6])
-    T_fs1.append(output[8])
-    if output[12] > 215.15:
+    fill_masses1.append(output[3])
+    press_masses1.append(output[6])
+    P_b1s1.append(output[4]/6894.757293) #psi
+    T_b1s1.append(output[5])
+    T_fs1.append(output[7])
+    if (output[7] > 215.15) & (output[10] >= (depl_time-dt/2)):
         Tcolors1.append("lightgreen")
     else:
         Tcolors1.append("salmon")
-    all_mdots1.append(output[10])
-    expl_times.append(output[11])
+    all_mdots1.append(output[9])
+    expl_times.append(output[10])
     part_nums.append(partnum)
     COPV_ODs.append(float(OD))
-    T_fburns.append(output[12])
 
 
 P_bstart = 2000*6894.757293 #Pa, full fill pressure
-while P_bstart <= 6500*6894.757293: #6500 psi, sweep end
+while P_bstart <= 4700*6894.757293: #4700 psi, sweep end
     tryP_b0(P_bstart)
     P_bstart += 20*6894.757293 #20 psi
 
@@ -284,8 +288,8 @@ points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses
 sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots, sorted_m_useds = zip(*points)
 ax[0,0].plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
 ax[1,0].plot(sorted_y, sorted_Tfs, color = "gray", linestyle = "-")
-points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, excesses, expl_times, part_nums, COPV_ODs, T_fburns), key = lambda p: p[12])
-sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_excesses, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_T_fburns = zip(*points1)
+points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, expl_times, part_nums, COPV_ODs), key = lambda p: p[11])
+sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs = zip(*points1)
 
 csvname = f"{T_amb}K_{depl_time:.2f}s.csv"
 with open(csvname, "w", newline="") as f:
@@ -298,10 +302,10 @@ with open(csvname, "w", newline="") as f:
 csvname1 = f"{T_amb}K_{depl_time:.2f}s_COPVs.csv"
 with open(csvname1, "w", newline="") as f1:
     writer = csv.writer(f1)
-    writer.writerow(["Part_num", "OD_in", "P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_fburn_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
+    writer.writerow(["Part_num", "OD_in", "P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
                      "mdot_total_max_kg_s", "all_mdots_kg_s", "T_f_ok", "expl_time_s"])
-    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, T_fb in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_T_fburns):
-        writer.writerow([pn, od, px, P1, vy, T1, T_fb, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext])
+    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs):
+        writer.writerow([pn, od, px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext])
 
 sc = ax[0,0].scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
 sc1 = ax[1,0].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
@@ -310,14 +314,13 @@ m_total = [mu + mp for mu, mp in zip(sorted_m_useds, sorted_press_masses)]
 P_grid = np.linspace(min(sorted_x)*0.8, max(sorted_x), 80)
 V_grid = np.linspace(min(sorted_y)*0.8, 35, 80)
 T_grid = np.full((len(V_grid), len(P_grid)), np.nan)
-rho_floor = 1 #kg/m^3
 for i, P in enumerate(P_grid):
     S = propssi("S", "T", T_b0, "P", 6894.757*P, "nitrogen")
     rho_0 = propssi("D", "T", T_b0, "P", 6894.757*P, "nitrogen")
     rho_min = propssi("D", "S", S, "P", P_tmin, "nitrogen")
     m_tot = np.interp(P, sorted_x, m_total)
     for j, V in enumerate(V_grid):
-        rho_end = max(rho_0 - m_tot/(V/1000), rho_floor) #rho_floor just so it doesnt break with
+        rho_end = max(rho_0 - m_tot/(V/1000), rho_min) #rho_floor just so it doesnt break with
         T_grid[j,i] = propssi("T", "D", rho_end, "S", S, "nitrogen")
 
 vmin, vmax = np.nanmin(T_grid), np.nanmax(T_grid)
@@ -340,7 +343,7 @@ def on_add(sel):
     TF = sorted_Tfs[sel.index]
     FM = sorted_fill_masses[sel.index]
     PM = sorted_press_masses[sel.index]
-    sel.annotation.set_text(f"{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K burn end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total")
+    sel.annotation.set_text(f"{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total")
     sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
 
 cursor2 = mplcursors.cursor(sc1, hover=mplcursors.HoverMode.Transient)
@@ -361,13 +364,11 @@ def on_add(sel):
     P1 = sorted_P_b1s1[sel.index]
     V = sorted_y1[sel.index]
     T1 = sorted_Tb1s1[sel.index]
-    TFb = sorted_T_fburns[sel.index]
     TF = sorted_T_fs1[sel.index]
     FM = sorted_fill_masses1[sel.index]
     PM = sorted_press_masses1[sel.index]
-    EX = sorted_excesses[sel.index]
     T = sorted_expl_times[sel.index]
-    sel.annotation.set_text(f"{name} {OD} in OD\n{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TFb:.0f}K burn end\n{TF:.0f}K end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total\n{T:.3f}s expulsion time\n{EX:.3f}kg excess mass")
+    sel.annotation.set_text(f"{name} {OD} in OD\n{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total\n{T:.3f}s expulsion time")
     sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
 
 
