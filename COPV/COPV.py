@@ -45,20 +45,20 @@ part_nums = []
 COPV_ODs = []
 
 #constants/variables
-Vdot_LOx = 0.00115512708 #m^3/s, max
+Vdot_LOx = 0.001111306 #m^3/s, nominal
 mdot_LOx = 1.268 #kg/s
 CF = 2
-m_LOx = 12.677951 #kg
-Vdot_IPA = 0.00114452214 #m^3/s, max
+m_LOx = 10*mdot_LOx #kg, nominal
+Vdot_IPA = 0.001086247 #m^3/s, nominal
 mdot_IPA = 0.932 #kg/s
-m_IPA = 9.3/2 #kg
+m_IPA = 9.82 #kg, max
 P_t = 3548704 #Pa, postreg P
 P_tmin = 6894757.293 #Pa, min P into reg
-T_amb = 305 #K adjust: ambient temperature
+T_amb = 300 #K adjust: ambient temperature
 V_uLOx = 0.00340 #m^3
 V_uIPA = 0.00307 #m^3
 V_utotal = 0.00699 #m^3
-T_b0 = 305 #K adjust: initial bottle temperature
+T_b0 = 300 #K adjust: initial bottle temperature
 dt = 0.05 #s
 depl_time = max(m_LOx/mdot_LOx, m_IPA/mdot_IPA) #s
 P_step = 20 #psi step
