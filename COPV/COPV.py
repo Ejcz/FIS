@@ -13,7 +13,7 @@ x = []
 y = []
 x1 = []
 y1 = []
-fig, ax = plt.subplots(2, 2, figsize=(8,8))
+fig, ax = plt.subplots(2, 2, figsize=(8,8), layout="constrained") #constrained layout keeps titles from overlapping
 ax[0,0].set_xlabel("Fill pressure (psi)")
 ax[0,0].set_ylabel("Bottle volume (L)")
 ax[0,0].grid(True)
@@ -368,6 +368,28 @@ fig.colorbar(cf, ax=ax[0,1], label = "T_f (K)")
 ax[0,1].plot(sorted_x, sorted_y, color = "gray", linestyle = "-", zorder = 3)
 sc2 = ax[0,1].scatter(sorted_x1, sorted_y1, c=sorted_Tcolors1, edgecolor = "white", linewidth = 1, s = 60, zorder = 4)
 ax[0,1].set_ylim(V_grid[0], V_max) #keep the axis inside the contour so there's no uncolored band
+
+#Titles and run parameters
+fig.suptitle(f"GN2 COPV blowdown sizing \u2014 T_amb {T_amb:g} K", fontsize=13, fontweight="bold")
+ax[0,0].set_title("Required bottle volume vs fill pressure\nblue = min reg inlet P reached, red = not", fontsize=9)
+ax[0,1].set_title("End temperature map + COPV options\ngreen = T_f > 215 K, salmon = too cold, red line = 215 K", fontsize=9)
+ax[1,0].set_title("End-of-burn temperature vs bottle volume\nblue = T_f > 215 K, red = too cold", fontsize=9)
+ax[1,1].axis("off")
+params = (
+    "Run parameters\n\n"
+    f"Ambient temp (T_amb)        {T_amb:g} K\n"
+    f"Initial bottle temp (T_b0)  {T_b0:g} K\n"
+    f"Burn / depletion time       {depl_time:.2f} s\n"
+    f"Reg outlet pressure (P_t)   {P_t/6894.757:.0f} psi\n"
+    f"Min reg inlet (P_tmin)      {P_tmin/6894.757:.0f} psi\n"
+    f"LOx Collapse factor (CF)    {CF:g}\n"
+    f"Ullage volume (V_utotal)    {V_utotal*1000:.2f} L\n"
+    f"T_f limit                   215.15 K\n"
+    f"Time step (dt)              {dt:g} s\n"
+    f"Sweep: {min(sorted_x):.0f}\u2013{max(sorted_x):.0f} psi, {P_step:g} psi steps\n"
+    f"COPVs shown: \u2264 {V_max:g} L"
+)
+ax[1,1].text(0.02, 0.98, params, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=8.5)
 
 cursor1 = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
 @cursor1.connect("add")
