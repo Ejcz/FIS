@@ -44,22 +44,24 @@ part_nums = []
 COPV_ODs = []
 
 #constants/variables
-Vdot_LOx = 0.00115512708 #m^3/s, max
+Vdot_LOx = 0.00111130587 #m^3/s, nominal
 mdot_LOx = 1.268 #kg/s
 CF = 2
-m_LOx = 12.677951 #kg
-Vdot_IPA = 0.00114452214 #m^3/s, max
+m_LOx = mdot_LOx*10 #kg
+Vdot_IPA = 0.00109 #m^3/s, nominal
 mdot_IPA = 0.932 #kg/s
-m_IPA = 9.3 #kg
+m_IPA = 9.82 #kg, max
 P_t = 3548704 #Pa, postreg P
 P_tmin = 6894757.293 #Pa, min P into reg
-T_amb = 275 #K adjust: ambient temperature
-V_uLOx = 0.00340 #m^3
-V_uIPA = 0.00307 #m^3
+T_amb = 300 #K adjust: ambient temperature
+V_uLOx = 0.0034010525 #m^3, nominal
+V_uIPA = 0.0036516 #m^3, nominal
 V_utotal = 0.00699 #m^3
-T_b0 = 275 #K adjust: initial bottle temperature
+T_b0 = 300 #K adjust: initial bottle temperature
 dt = 0.05 #s
 depl_time = max(m_LOx/mdot_LOx, m_IPA/mdot_IPA) #s
+V_tolerance = 0.00001
+P_step = 20 #psi step during sweep
 
 ax[0,1].set_title(f"{T_amb}K ambient {depl_time:.2f}s burn") #adjust: graph title
 
@@ -93,10 +95,9 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
     error = 1 #placeholder
     m_usedguess = 2.2 #kg
 
-    while error > 0.00001:
+    while error > V_tolerance:
         time = 0 #s
         m_used = 0 #kg
-        T_w = 300 #k
         mdots_LOx = []
         mdots_IPA = []
         mdots_total = []
@@ -148,12 +149,12 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
     T_f = propssi("T", "S", S, "D", rho_b, "nitrogen")
 
     print(f"m_used: {m_used:.3f} kg in {time:.3f}s")
-    print(f"V_b: {1000*V_b:.2f}L, T_w: {T_w:.0f}K, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, T_f: {T_f:.0f}\nMin pressure reached: {endreached}")
+    print(f"V_b: {1000*V_b:.2f}L, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, T_f: {T_f:.0f}\nMin pressure reached: {endreached}")
     print(f"LOx max m dot: {max(mdots_LOx):.3f}kg/s @ {(mdots_LOx.index(max(mdots_LOx))+1)*dt:.3f}s")
     print(f"IPA max m dot: {max(mdots_IPA):.3f}kg/s @ {(mdots_IPA.index(max(mdots_IPA))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
     print("---------------------------------------------------------------------------------------")
-    return V_b, max(mdots_LOx), max(mdots_IPA), max(mdots_total), endreached, rho_b0*V_b, P_b1, T_b1, m_pres, T_f, T_w, mdots_total, m_used
+    return V_b, max(mdots_LOx), max(mdots_IPA), max(mdots_total), endreached, rho_b0*V_b, P_b1, T_b1, m_pres, T_f, mdots_total, m_used
 
 
 def tryP_b0(P_b0):
@@ -174,14 +175,13 @@ def tryP_b0(P_b0):
         Tcolors.append("blue")
     else:
         Tcolors.append("red")
-    all_mdots.append(output[11])
-    m_useds.append(output[12])
+    all_mdots.append(output[10])
+    m_useds.append(output[11])
 
 def use_bottle(V_b): #come back here
     time = 0 #s
     m_used = 0 #kg
     m_pres = 0.2641458904 #kg, initial guess
-    T_w = 300 #k
     mdots_LOx1 = []
     mdots_IPA1 = []
     mdots_total1 = []
@@ -241,12 +241,12 @@ def use_bottle(V_b): #come back here
     T_f = propssi("T", "S", S, "D", rho_b, "nitrogen")
 
     print(f"m_used: {m_used:.3f} kg in {time:.3f}s")
-    print(f"V_b: {1000*V_b:.2f}L, T_w: {T_w:.0f}K, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, T_f: {T_f:.0f}")
+    print(f"V_b: {1000*V_b:.2f}L, fill mass: {rho_b0*V_b:.3f} kg, pressurization mass: {m_pres:.3f} kg\nP_b0: {P_b0/6894.757:.0f} psi, P_b1: {P_b1/6894.757:.0f} psi, T_b1: {T_b1:.0f} K, T_f: {T_f:.0f}")
     print(f"LOx max m dot: {max(mdots_LOx1):.3f}kg/s @ {(mdots_LOx1.index(max(mdots_LOx1))+1)*dt:.3f}s")
     print(f"IPA max m dot: {max(mdots_IPA1):.3f}kg/s @ {(mdots_IPA1.index(max(mdots_IPA1))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total1):.3f}kg/s @ {(mdots_total1.index(max(mdots_total1))+1)*dt:.3f}s")
     print("---------------------------------------------------------------------------------------")
-    return max(mdots_LOx1), max(mdots_IPA1), max(mdots_total1), rho_b0*V_b, P_b1, T_b1, m_pres, T_f, T_w, mdots_total1, time
+    return max(mdots_LOx1), max(mdots_IPA1), max(mdots_total1), rho_b0*V_b, P_b1, T_b1, m_pres, T_f, mdots_total1, time
 
 def usebottle(P_b0, V_b, partnum, OD):
     output = use_bottle(V_b) #come back here for solver
@@ -258,12 +258,12 @@ def usebottle(P_b0, V_b, partnum, OD):
     P_b1s1.append(output[4]/6894.757293) #psi
     T_b1s1.append(output[5])
     T_fs1.append(output[7])
-    if (output[7] > 215.15) & (output[10] >= (depl_time-dt/2)):
+    if (output[7] > 215.15) & (output[9] >= (depl_time-dt/2)):
         Tcolors1.append("lightgreen")
     else:
         Tcolors1.append("salmon")
-    all_mdots1.append(output[9])
-    expl_times.append(output[10])
+    all_mdots1.append(output[8])
+    expl_times.append(output[9])
     part_nums.append(partnum)
     COPV_ODs.append(float(OD))
 
@@ -271,7 +271,7 @@ def usebottle(P_b0, V_b, partnum, OD):
 P_bstart = 2000*6894.757293 #Pa, full fill pressure
 while P_bstart <= 4700*6894.757293: #4700 psi, sweep end
     tryP_b0(P_bstart)
-    P_bstart += 20*6894.757293 #20 psi
+    P_bstart += P_step*6894.757293 #20 psi
 
 V_candidates = readCSV(filename, "V (L)")
 P_candidates = readCSV(filename, "Fill pressure (psi)")
