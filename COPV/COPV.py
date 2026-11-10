@@ -1,9 +1,11 @@
 from CoolProp.CoolProp import PropsSI as propssi
+import CoolProp.CoolProp as CP
 from scipy import integrate, optimize, constants
 import numpy as np
 import matplotlib.pyplot as plt
 import mplcursors
 import csv
+import os
 
 #come back here: debug the end temperature or contour being weird
 plt.close()
@@ -64,8 +66,14 @@ depl_time = max(m_LOx/mdot_LOx, m_IPA/mdot_IPA) #s
 P_step = 20 #psi step
 V_error = 0.0001
 endPressureError = 5 #psi
+V_max = 25 #L, largest bottle considered: CSV bottles above this are skipped, contour plot ends here
 
-filename = "C:/Users/Chris/Documents/Github/FIS/COPV/GN2_COPV_Options.csv" #adjust: COPV options filename
+#CoolProp low-level states: much faster than PropsSI in the time-step loops (no string parsing per call)
+N2_b = CP.AbstractState("HEOS", "Nitrogen") #gas in the bottle
+N2_in = CP.AbstractState("HEOS", "Nitrogen") #gas going into the prop tanks (post-reg)
+m_guess_prev = 2.2 #kg, warm start for size_bottle: converged m_used+m_pres from the previous pressure
+
+filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GN2_COPV_Options.csv") #adjust: COPV options filename
 def readCSV(filename, colname):
     data = []
     with open(filename, newline="") as f:
@@ -89,14 +97,17 @@ def fill_mass(V_u, h_in):
 
 #----------------------------------------------------
 #start burn - end burn
-def size_bottle(P_b0): #P_b0 = before prepressurization
+def size_bottle(P_b0, m_usedguess = 2.2): #P_b0 = before prepressurization, m_usedguess = starting guess for m_used+m_pres (kg)
     #constants
     m_used = 0 #kg
     #P_b0 = 21766190.54 #Pa
     m_pres = 0.2641458904 #kg, initial guess
 
     error = 1 #placeholder
-    m_usedguess = 2.2 #kg
+
+    S = propssi("S", "T", T_b0, "P", P_b0, "nitrogen") #J/kgK, flow assumed to be isentropic so specific S stays constant
+    rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
+    rho_end = propssi("D", "P", P_tmin, "S", S, "nitrogen") #kg/m^3
 
     while error > V_error:
         time = 0 #s
@@ -104,9 +115,6 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
         mdots_LOx = []
         mdots_IPA = []
         mdots_total = []
-        S = propssi("S", "T", T_b0, "P", P_b0, "nitrogen") #J/kgK, flow assumed to be isentropic so specific S stays constant
-        rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
-        rho_end = propssi("D", "P", P_tmin, "S", S, "nitrogen") #kg/m^3
         V_b = m_usedguess/(rho_b0-rho_end) #m^3, guess bottle volume based on m_used
         rho_b1 = rho_b0-m_pres/V_b #density after pressurization, before burn
         u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen") #specfic internal energy before pressurization
@@ -122,11 +130,13 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
         rho_b1 = rho_b0-m_pres/V_b #these are for the start of burn btw
         P_b1 = propssi("P", "D", rho_b1, "S", S, "nitrogen")
         T_b1 = propssi("T", "P", P_b1, "D", rho_b1, "nitrogen")
-        
+
         while (time <= depl_time):
-            h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-            rho_in = propssi("D", "P", P_t, "T", h_b, "nitrogen") #rho GN2 going into tanks
-            
+            N2_b.update(CP.DmassSmass_INPUTS, rho_b, S)
+            h_b = N2_b.hmass() #isentropic flow, specific H bottle = specific H tanks
+            N2_in.update(CP.HmassP_INPUTS, h_b, P_t)
+            rho_in = N2_in.rhomass() #rho GN2 going into tanks
+
             mdot_LOx = Vdot_LOx * CF * rho_in #flow of GN2 into LOx tank, kg/s does velocity decrease when paths split (ignoring friction)? come back here
             mdot_IPA = Vdot_IPA * rho_in #flow of GN2 into IPA tank, kg/s
             mdot_total = mdot_LOx + mdot_IPA 
@@ -136,11 +146,11 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
 
             m_used += mdot_total * dt
             rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
-            P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
             time += dt
         error = abs(m_usedguess-m_used-m_pres)
         m_usedguess = m_used+m_pres
 
+    P_b = propssi("P", "S", S, "D", rho_b, "nitrogen") #end-of-burn pressure, only needed once
     if abs(P_b-P_tmin) <= endPressureError*6894.757: #5 psi
         endreached = True
     else:
@@ -153,29 +163,45 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
     print(f"IPA max m dot: {max(mdots_IPA):.3f}kg/s @ {(mdots_IPA.index(max(mdots_IPA))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
     print("---------------------------------------------------------------------------------------")
-    return V_b, max(mdots_LOx), max(mdots_IPA), max(mdots_total), endreached, rho_b0*V_b, P_b1, T_b1, m_pres, T_f, mdots_total, m_used
+    out = {
+        "V_b": V_b,
+        "mdot_LOx_max": max(mdots_LOx),
+        "mdot_IPA_max": max(mdots_IPA),
+        "mdot_total_max": max(mdots_total),
+        "endreached": endreached,
+        "fill_mass": rho_b0*V_b,
+        "P_b1": P_b1,
+        "T_b1": T_b1,
+        "m_pres": m_pres,
+        "T_f": T_f,
+        "mdots_total": mdots_total,
+        "m_used": m_used
+    }
+    return out
 
 #Function that tries bottles and appends lists for plotting
 def tryP_b0(P_b0):
-    output = size_bottle(P_b0)
+    global m_guess_prev
+    output = size_bottle(P_b0, m_guess_prev)
+    m_guess_prev = output["m_used"] + output["m_pres"] #neighbouring pressures converge to nearly the same mass
     x.append(P_b0/6894.757293) #psi
-    y.append(1000*output[0]) #L
-    mdots.append((output[1], output[2], output[3]))
-    if output[4] == True:
+    y.append(1000*output["V_b"]) #L
+    mdots.append((output["mdot_LOx_max"], output["mdot_IPA_max"], output["mdot_total_max"]))
+    if output["endreached"] == True:
         colors.append("blue")
     else:
         colors.append("red")
-    fill_masses.append(output[5])
-    press_masses.append(output[8])
-    P_b1s.append(output[6]/6894.757293) #psi
-    T_b1s.append(output[7])
-    T_fs.append(output[9])
-    if output[9] > 215.15:
+    fill_masses.append(output["fill_mass"])
+    press_masses.append(output["m_pres"])
+    P_b1s.append(output["P_b1"]/6894.757293) #psi
+    T_b1s.append(output["T_b1"])
+    T_fs.append(output["T_f"])
+    if output["T_f"] > 215.15:
         Tcolors.append("blue")
     else:
         Tcolors.append("red")
-    all_mdots.append(output[10])
-    m_useds.append(output[11])
+    all_mdots.append(output["mdots_total"])
+    m_useds.append(output["m_used"])
 
 #-----------------------------------------------------
 #Function that tries bottles and appends lists for plotting
@@ -213,10 +239,11 @@ def use_bottle(P_b0, V_b):
     while time <= depl_time : #come back here: check outputs with check valve and also line flow
         if P_b < P_tmin:
             break
-        h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-        T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks. check this at the end? come back here
-        rho_in = propssi("D", "P", P_t, "T", T_in, "nitrogen") #rho GN2 going into tanks
-        
+        N2_b.update(CP.DmassSmass_INPUTS, rho_b, S)
+        h_b = N2_b.hmass() #isentropic flow, specific H bottle = specific H tanks
+        N2_in.update(CP.HmassP_INPUTS, h_b, P_t)
+        rho_in = N2_in.rhomass() #rho GN2 going into tanks
+
         mdot_LOx = Vdot_LOx * CF * rho_in
         mdot_IPA = Vdot_IPA * rho_in
         mdot_total = mdot_LOx + mdot_IPA
@@ -226,8 +253,8 @@ def use_bottle(P_b0, V_b):
 
         m_used += mdot_total * dt
         rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
-        P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
-        T_b = propssi("T", "S", S, "D", rho_b, "nitrogen")
+        N2_b.update(CP.DmassSmass_INPUTS, rho_b, S)
+        P_b = N2_b.p()
         time += dt
     T_f = propssi("T", "S", S, "D", rho_b, "nitrogen")
     m_excess = rho_b * V_b - rho_end * V_b
@@ -238,26 +265,40 @@ def use_bottle(P_b0, V_b):
     print(f"IPA max m dot: {max(mdots_IPA):.3f}kg/s @ {(mdots_IPA.index(max(mdots_IPA))+1)*dt:.3f}s")
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
     print("---------------------------------------------------------------------------------------")
-    return max(mdots_LOx), max(mdots_IPA), max(mdots_total), m_excess, rho_b0*V_b, P_b1, T_b1, m_pres, T_f, mdots_total, time
+
+    out = {
+        "mdot_LOx_max": max(mdots_LOx),
+        "mdot_IPA_max": max(mdots_IPA),
+        "mdot_total_max": max(mdots_total),
+        "m_excess": m_excess,
+        "fill_mass": rho_b0*V_b,
+        "P_b1": P_b1,
+        "T_b1": T_b1,
+        "m_pres": m_pres,
+        "T_f": T_f,
+        "mdots_total": mdots_total,
+        "time": time
+    }
+    return out
 
 #For plotting, appends lists for COPV options
 def usebottle(P_b0, V_b, partnum, OD):
     output = use_bottle(P_b0, V_b)
     x1.append(P_b0/6894.757293) #psi
     y1.append(1000*V_b) #L
-    mdots1.append((output[0], output[1], output[2]))
-    excesses.append(output[3])
-    fill_masses1.append(output[4])
-    press_masses1.append(output[7])
-    P_b1s1.append(output[5]/6894.757293) #psi
-    T_b1s1.append(output[6])
-    T_fs1.append(output[8])
-    if output[8] > 215.15:
+    mdots1.append((output["mdot_LOx_max"], output["mdot_IPA_max"], output["mdot_total_max"]))
+    excesses.append(output["m_excess"])
+    fill_masses1.append(output["fill_mass"])
+    press_masses1.append(output["m_pres"])
+    P_b1s1.append(output["P_b1"]/6894.757293) #psi
+    T_b1s1.append(output["T_b1"])
+    T_fs1.append(output["T_f"])
+    if output["T_f"] > 215.15:
         Tcolors1.append("lightgreen")
     else:
         Tcolors1.append("salmon")
-    all_mdots1.append(output[9])
-    expl_times.append(output[10])
+    all_mdots1.append(output["mdots_total"])
+    expl_times.append(output["time"])
     part_nums.append(partnum)
     COPV_ODs.append(OD)
 
@@ -274,9 +315,11 @@ partnums = readCSV(filename, "Part #")
 ODs = readCSV(filename, "Diameter (in)")
 
 for P_psi, V_L, partnum, OD in zip(P_candidates, V_candidates, partnums, ODs, strict=True):
+    if float(V_L) > V_max:
+        continue #too big, outside the plotted range
     P_b0 = float((P_psi).replace(",", ""))*6894.757
     V_b = float(V_L)/1000
-    usebottle(P_b0, V_b, partnum, OD)
+    usebottle(P_b0, V_b, partnum, float(OD))
 
 points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses, T_fs, Tcolors, all_mdots, m_useds), key = lambda p: p[0])
 sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots, sorted_m_useds = zip(*points)
@@ -288,6 +331,10 @@ sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_
 csvname = input("CSV name: ")
 if not csvname.endswith(".csv"):
     csvname += ".csv"
+output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs") #generated files go here (gitignored)
+os.makedirs(output_dir, exist_ok=True)
+csvname = os.path.join(output_dir, csvname)
+print(f"Saving results to {csvname}")
 with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
@@ -300,17 +347,17 @@ sc1 = ax[1,0].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
 
 m_total = [mu + mp for mu, mp in zip(sorted_m_useds, sorted_press_masses)]
 P_grid = np.linspace(min(sorted_x), max(sorted_x), 80)
-V_grid = np.linspace(min(sorted_y)*0.8, 25, 80)
+V_grid = np.linspace(min(sorted_y)*0.8, V_max, 80)
 T_grid = np.full((len(V_grid), len(P_grid)), np.nan)
 rho_floor = 1 #kg/m^3
 for i, P in enumerate(P_grid):
     S = propssi("S", "T", T_b0, "P", 6894.757*P, "nitrogen")
     rho_0 = propssi("D", "T", T_b0, "P", 6894.757*P, "nitrogen")
-    rho_min = propssi("D", "S", S, "P", P_tmin, "nitrogen")
     m_tot = np.interp(P, sorted_x, m_total)
     for j, V in enumerate(V_grid):
         rho_end = max(rho_0 - m_tot/(V/1000), rho_floor) #rho_floor just so it doesnt break with
-        T_grid[j,i] = propssi("T", "D", rho_end, "S", S, "nitrogen")
+        N2_b.update(CP.DmassSmass_INPUTS, rho_end, S)
+        T_grid[j,i] = N2_b.T()
 
 vmin, vmax = np.nanmin(T_grid), np.nanmax(T_grid)
 levels = np.linspace(vmin, vmax, 20)
@@ -320,6 +367,7 @@ ax[0,1].contour(P_grid, V_grid, T_grid, levels=[215.15], colors="red", linewidth
 fig.colorbar(cf, ax=ax[0,1], label = "T_f (K)")
 ax[0,1].plot(sorted_x, sorted_y, color = "gray", linestyle = "-", zorder = 3)
 sc2 = ax[0,1].scatter(sorted_x1, sorted_y1, c=sorted_Tcolors1, edgecolor = "white", linewidth = 1, s = 60, zorder = 4)
+ax[0,1].set_ylim(V_grid[0], V_max) #keep the axis inside the contour so there's no uncolored band
 
 cursor1 = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
 @cursor1.connect("add")
