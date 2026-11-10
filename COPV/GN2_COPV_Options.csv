@@ -3,10 +3,14 @@ Part #,Company,Cert,V (L),Rated pressure (psi),Rated pressure (bar),Diameter (in
 T170A (L6X),Luxfer Gas Cylinders (ex-SCI),"Type 3, DOT-CFFC",18.1,"4,500",310,8.1,31.3,10.3,MS33649-10 (0.875-14 UNF-2B),Direct: -10 ORB,2500
 6265,Eaton (Aerospace composite cylinders),DOT,16.6,"3,295",227,7.16,33.78,7.71,AS5202-16,Direct: -16 ORB male; reduce to -6/-8 JIC,2500
 6187,Eaton (Aerospace composite cylinders),DOT,18,"3,675",253,8.24,29.47,9.89,AS5202-16,Direct: -16 ORB male; reduce to -6/-8 JIC,2500
-6208,Eaton (Aerospace composite cylinders),DOT,31.3,5000,345,8.4,48.01,18.2,AS5202-16,idk rn,2500
+6208,Eaton (Aerospace composite cylinders),DOT,31.3,5000,345,8.4,48.01,18.2,AS5202-16,idk rn,2200
 6187,Eaton (Aerospace composite cylinders),DOT,18,"3,675",253,8.24,29.47,9.9,AS5202-16,idk rn,2500
 8106-5,Eaton (Aerospace composite cylinders),DOT,17.9,"3,295",227,8.76,25.31,7.2,AS5202-16,idk rn,2500
 T144A ,Luxfer Gas Cylinders,"Type 3, DOT",18,"3,597",248,7.91,32.99,8.6,MS33649-16 (1.3125-12 UN2B),idk rn,2500
 T170A,Luxfer Gas Cylinders,"Type 3, DOT",18.1,"4,496",310,8.11,31.3,10.3,MS33649-10 (0.875-14 UNF-2B),idk rn,2500
 T188C,Luxfer Gas Cylinders,"Type 3, DOT",18.1,"4,496",340,8.11,31.3,10.2,MS33649-10 (0.875-14 UNF-2B),idk rn,2500
 T200A,Luxfer Gas Cylinders,"Type 3, DOT",26.8,"3,292",227,10.12,29.29,11.4,MS33649-16 (1.3125-12 UN2B),idk rn,2500
+CRP ?-190-18.0-30-T,Zhejiang Kaibo,Type 3,18,4351.14,300,8.0708705,31.2992,11,idk,idk rn,3500
+CRPIII-192-20.0-30-T,ALSAFE,Type 3?,20,4351.14,300,8.26772,33.4646,9,idk,idk rn,3000
+CRPIII-192-20-30-T,Snow Rain,Type 3?,20,4351.14,300,8.18898,33.0709,9,idk,idk rn,3000
+WOGC-208-20.0-30-T,WOBO,Type 3?,20,4351.14,300,8.18898,33.4646,9,idk,idk rn,3000

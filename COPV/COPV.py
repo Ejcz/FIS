@@ -53,11 +53,11 @@ mdot_IPA = 0.932 #kg/s
 m_IPA = 9.3 #kg
 P_t = 3548704 #Pa, postreg P
 P_tmin = 6894757.293 #Pa, min P into reg
-T_amb = 305 #K adjust: ambient temperature
+T_amb = 275 #K adjust: ambient temperature
 V_uLOx = 0.00340 #m^3
 V_uIPA = 0.00307 #m^3
 V_utotal = 0.00699 #m^3
-T_b0 = 305 #K adjust: initial bottle temperature
+T_b0 = 275 #K adjust: initial bottle temperature
 dt = 0.05 #s
 depl_time = max(m_LOx/mdot_LOx, m_IPA/mdot_IPA) #s
 
@@ -186,17 +186,16 @@ def use_bottle(V_b): #come back here
     mdots_IPA1 = []
     mdots_total1 = []
 
-    # def T_end(P_fill): come back here, come back to this
-    #     S = propssi("S", "P", P_fill, "T", T_b0, "nitrogen")
-    #     return propssi("T", "S", S, "P", P_tmin, "nitrogen")
+    def T_end(P_fill): #as in total fill pressure
+        S = propssi("S", "P", P_fill, "T", T_b0, "nitrogen")
+        return propssi("T", "S", S, "P", P_tmin, "nitrogen")
 
-    # def f(P_fill):
-    #     return T_end(P_fill) - 215.15 #K
+    def f(P_fill):
+        return T_end(P_fill) - 215.15 #K
 
-    # P_low = P_tmin*1.01
-    # P_high = 5000*6894.757
-    # P_b0 = optimize.brentq(f, P_low, P_high)
-
+    P_low = P_tmin*1.01
+    P_high = 5000*6894.757
+    P_b0 = optimize.brentq(f, P_low, P_high) #come back here for solver
 
     S = propssi("S", "T", T_b0, "P", P_b0, "nitrogen") #J/kgK, flow assumed to be isentropic so specific S stays constant
     rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
@@ -250,7 +249,7 @@ def use_bottle(V_b): #come back here
     return max(mdots_LOx1), max(mdots_IPA1), max(mdots_total1), rho_b0*V_b, P_b1, T_b1, m_pres, T_f, T_w, mdots_total1, time
 
 def usebottle(P_b0, V_b, partnum, OD):
-    output = use_bottle(V_b)
+    output = use_bottle(V_b) #come back here for solver
     x1.append(P_b0/6894.757293) #psi
     y1.append(1000*V_b) #L
     mdots1.append((output[0], output[1], output[2]))

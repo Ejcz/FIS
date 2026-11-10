@@ -23,6 +23,10 @@ ID_down = OD_down-2*t_down
 rho_oks = []
 COPVs = []
 machs = []
+up_SF_ys = []
+up_SF_bs = []
+down_SF_ys = []
+down_SF_bs = []
 
 def readCSV(filename, colname):
     data = []
@@ -108,6 +112,10 @@ for i in range(len(COPVs)):
         
         m_b -= mdot*dt
     machs.append([max(up_machs),max(down_machs)])
+    up_SF_ys.append(up_P_y/P_b0)
+    up_SF_bs.append(up_P_b/P_b0)
+    down_SF_ys.append(down_P_y/P_b0)
+    down_SF_bs.append(down_P_b/P_b0)
 
 if len(filename) == 21:
     csvname = f"{filename[0:3]}K_{filename[-16:-11]}s_{OD_up}upOD_{t_up}upt_{OD_down}downOD_{t_down}downt.csv"
@@ -115,8 +123,8 @@ elif len(filename) == 20:
     csvname = f"{filename[0:3]}K_{filename[-15:-11]}s_{OD_up}upOD_{t_up}upt_{OD_down}downOD_{t_down}downt.csv"
 with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
-    writer.writerow(["Part_num", "up_mach", "down_mach"])
+    writer.writerow(["Part_num", "up_mach", "down_mach", "up_SF_y", "up_SF_b", "down_SF_y", "down_SF_b"])
     for i in range(len(COPVs)): #come back here
-        writer.writerow([COPVs[i], machs[i][0], machs[i][1]])
+        writer.writerow([COPVs[i], machs[i][0], machs[i][1], up_SF_ys[i], up_SF_bs[i], down_SF_ys[i], down_SF_bs[i]])
 
 
