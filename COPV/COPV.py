@@ -125,7 +125,7 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
         
         while (time <= depl_time):
             h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-            rho_in = propssi("D", "P", P_t, "T", h_b, "nitrogen") #rho GN2 going into tanks
+            rho_in = propssi("D", "P", P_t, "HMASS", h_b, "nitrogen") #rho GN2 going into tanks
             
             mdot_LOx = Vdot_LOx * CF * rho_in #flow of GN2 into LOx tank, kg/s does velocity decrease when paths split (ignoring friction)? come back here
             mdot_IPA = Vdot_IPA * rho_in #flow of GN2 into IPA tank, kg/s
