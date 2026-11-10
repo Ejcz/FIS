@@ -127,7 +127,7 @@ def size_bottle(P_b0): #P_b0 = before prepressurization
             T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks. check this at the end? come back here
             rho_in = propssi("D", "P", P_t, "T", T_in, "nitrogen") #rho GN2 going into tanks
             
-            mdot_LOx = Vdot_LOx * CF * rho_in
+            mdot_LOx = Vdot_LOx * CF * rho_in #does velocity decrease when paths split (ignoring friction)? come back here
             mdot_IPA = Vdot_IPA * rho_in
             mdot_total = mdot_LOx + mdot_IPA
             mdots_LOx.append(mdot_LOx)
