@@ -61,7 +61,7 @@ def calcMach(P0, h0, S0, mdot, area):
     return M
 
 
-filedir = "C:/Users/Chris/Documents/Github/FIS/COPV/" #adjust: CSV file directory
+filedir = "C:/Users/Chris/Documents/Github/FIS/COPV/outputs/" #adjust: CSV file directory
 filename = input("Filename: ")
 if not filename.endswith(".csv"):
     filename += ".csv"
@@ -117,10 +117,7 @@ for i in range(len(COPVs)):
     down_SF_ys.append(down_P_y/P_b0)
     down_SF_bs.append(down_P_b/P_b0)
 
-if len(filename) == 21:
-    csvname = f"{filename[0:3]}K_{filename[-16:-11]}s_{OD_up}upOD_{t_up}upt_{OD_down}downOD_{t_down}downt.csv"
-elif len(filename) == 20:
-    csvname = f"{filename[0:3]}K_{filename[-15:-11]}s_{OD_up}upOD_{t_up}upt_{OD_down}downOD_{t_down}downt.csv"
+csvname = f"{filename[0:3]}K_{OD_up}upOD_{t_up}upt_{OD_down}downOD_{t_down}downt.csv"
 with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["Part_num", "up_mach", "down_mach", "up_SF_y", "up_SF_b", "down_SF_y", "down_SF_b"])
