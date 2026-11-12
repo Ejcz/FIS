@@ -69,7 +69,7 @@ endPressureError = 5 #psi
 m_guess_prev = 2.2 #kg
 V_max = 29 #L cap on volume sweep
 T_rating = 215.15 #K
-T_tol = 3 #K
+T_tol = 0 #K, come back here
 press = "idk"
 
 #filename = "C:/Users/Chris/Documents/Github/FIS/COPV/GN2_COPV_Options.csv" #adjust: COPV options filename
@@ -286,19 +286,19 @@ def endT(P_fill):
     return propssi("T", "P", P_tmin, "S", S, "nitrogen")
 
 P_lo = P_tmin*1.1
-P_hi = 6000*6894.757
+P_hi = 5300*6894.757
 
-if (endT(P_lo) > T_rating + T_tol) & (endT(P_hi) < T_rating + T_tol): #if lower bound meets temp req and upper bound doesnt, solve for greatest upper bound
+if (endT(P_lo) > (T_rating + T_tol)) & (endT(P_hi) < (T_rating + T_tol)): #if lower bound meets temp req and upper bound doesnt, solve for greatest upper bound
     P_fillmax = optimize.brentq(lambda P: endT(P) - (T_rating + T_tol), P_lo, P_hi, xtol = 0.1*6894.757)
 else:
     P_fillmax = P_hi #if not, P_lo always < P_hi and P_lo basically always fulfills the temperature requirement so P_hi also fulfills temperature requirement within a realistic range (we're not going above 6 ksi)
 
 def solve_fill(V_b, P_rating):
-    hi = min(P_fillmax, P_rating)
+    hi = P_rating #something's sketchy? come back here
     margin_lo = use_bottle(P_lo, V_b)["rho_margin"]
     margin_hi = use_bottle(hi, V_b)["rho_margin"]
     if margin_hi < 0:
-        return hi, "cooked"
+        return hi, "cooked" #kinda sketch, come back here
     elif margin_lo > 0:
         return P_lo, "all good"
     P_fill = optimize.brentq(lambda P: use_bottle(P, V_b)["rho_margin"], P_lo, hi)
@@ -433,6 +433,8 @@ for s in range(len(sorted_statuses)):
     elif sorted_statuses[s] == "ok":
         oks.append(sorted_part_nums[s])
 
+cookedi = 0
+oki = 0
 for c in cookeds:
     cooked_bs += f"{c}\n"
 for o in oks:
@@ -442,8 +444,8 @@ for a in allgoods:
 
 
 ax[1,1].text(0.02, 0.98, params, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
-ax[1,1].text(0.6, 0.98, cooked_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
-ax[1,1].text(0.02, 0.30, ok_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
+#ax[1,1].text(0.6, 0.98, cooked_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
+#ax[1,1].text(0.02, 0.30, ok_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
 #ax[1,1].text(0.02, 0.02, allgood_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
 
 cursor1 = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
