@@ -1,19 +1,19 @@
-Part #,Company,Cert,V (L),Rated pressure (psi),Rated pressure (bar),Diameter (in),Length (in),Weight (kg),Port type/size,ORB/JIC path
-8106-5,Eaton,"Type 3, DOT-CFFC",17.9,"3,295",227,8.76,25.31,7.19,AS5202-16,Direct: -16 ORB
-T170A (L6X),Luxfer (ex-SCI),"Type 3, DOT-CFFC",18.1,"4,500",310,8.1,31.3,10.3,MS33649-10 (0.875-14 UNF-2B),Direct: -10 ORB
-6265,Eaton,DOT,16.6,"3,295",227,7.16,33.78,7.71,AS5202-16,Direct: -16 ORB male; reduce to -6/-8 JIC
-6187,Eaton,DOT,18,"3,675",253,8.24,29.47,9.89,AS5202-16,Direct: -16 ORB male; reduce to -6/-8 JIC
-6208,Eaton,DOT,31.3,5000,345,8.4,48.01,18.2,AS5202-16,idk rn
-6187,Eaton,DOT,18,"3,675",253,8.24,29.47,9.9,AS5202-16,idk rn
-8106-5,Eaton,DOT,17.9,"3,295",227,8.76,25.31,7.2,AS5202-16,idk rn
-T144A ,Luxfer,"Type 3, DOT",18,"3,597",248,7.91,32.99,8.6,MS33649-16 (1.3125-12 UN2B),idk rn
-T170A,Luxfer,"Type 3, DOT",18.1,"4,496",310,8.11,31.3,10.3,MS33649-10 (0.875-14 UNF-2B),idk rn
-T188C,Luxfer,"Type 3, DOT",18.1,"4,496",340,8.11,31.3,10.2,MS33649-10 (0.875-14 UNF-2B),idk rn
-T200A,Luxfer,"Type 3, DOT",26.8,"3,292",227,10.12,29.29,11.4,MS33649-16 (1.3125-12 UN2B),idk rn
-CRPIII-190-18.0-30-T,Zhejiang Kaibo,Type 3,18,4351.14,300,8.0708705,31.2992,11,idk,idk rn
-CRPIII-192-20.0-30-T,ALSAFE,Type 3?,20,4351.14,300,8.26772,33.4646,9,idk,idk rn
-CRPIII-192-20-30-T,Snow Rain,Type 3?,20,4351.14,300,8.18898,33.0709,9,idk,idk rn
-WOGC-208-20.0-30-T,WOBO,Type 3?,20,4351.14,300,8.18898,33.4646,9,idk,idk rn
-test1,test,doesn’t matter,24,4000,300,8,25,8,idk,idk
-test2,test,doesn’t matter,26,4000,300,8,25,8,idk,idk
-test3,test,doesn’t matter,28,4000,300,8,25,8,idk,idk
+Part #,Company,Cert,V (L),Rated pressure (psi),Rated pressure (bar),Diameter (in),Length (in),Weight (kg),Port type/size,ORB/JIC path,Link
+8106-5,Eaton,"Type 3, DOT-CFFC",17.9,"3,295",227,8.76,25.31,7.19,AS5202-16,Direct: -16 ORB,https://www.eaton.com/content/dam/eaton/products/aerospace/mision-systems/oxygen-systems/composite-cylinders/eaton-composite-cylinders-TF800-3-en-us.pdf
+T170A (L6X),Luxfer (ex-SCI),"Type 3, DOT-CFFC",18.1,"4,500",310,8.1,31.3,10.3,MS33649-10 (0.875-14 UNF-2B),Direct: -10 ORB,https://www.luxfercylinders.com/product/l6x-composite-cylinder/
+6265,Eaton,DOT,16.6,"3,295",227,7.16,33.78,7.71,AS5202-16,Direct: -16 ORB male; reduce to -6/-8 JIC,https://www.eaton.com/content/dam/eaton/products/aerospace/mision-systems/oxygen-systems/composite-cylinders/eaton-composite-cylinders-TF800-3-en-us.pdf
+6187,Eaton,DOT,18,"3,675",253,8.24,29.47,9.89,AS5202-16,Direct: -16 ORB male; reduce to -6/-8 JIC,https://www.eaton.com/content/dam/eaton/products/aerospace/mision-systems/oxygen-systems/composite-cylinders/eaton-composite-cylinders-TF800-3-en-us.pdf
+6208,Eaton,DOT,31.3,5000,345,8.4,48.01,18.2,AS5202-16,idk rn,https://www.eaton.com/content/dam/eaton/products/aerospace/mision-systems/oxygen-systems/composite-cylinders/eaton-composite-cylinders-TF800-3-en-us.pdf
+6187,Eaton,DOT,18,"3,675",253,8.24,29.47,9.9,AS5202-16,idk rn,https://www.eaton.com/content/dam/eaton/products/aerospace/mision-systems/oxygen-systems/composite-cylinders/eaton-composite-cylinders-TF800-3-en-us.pdf
+8106-5,Eaton,DOT,17.9,"3,295",227,8.76,25.31,7.2,AS5202-16,idk rn,https://www.eaton.com/content/dam/eaton/products/aerospace/mision-systems/oxygen-systems/composite-cylinders/eaton-composite-cylinders-TF800-3-en-us.pdf
+T144A ,Luxfer,"Type 3, DOT",18,"3,597",248,7.91,32.99,8.6,MS33649-16 (1.3125-12 UN2B),idk rn,https://www.luxfercylinders.com/product/l6x-composite-cylinder/
+T170A,Luxfer,"Type 3, DOT",18.1,"4,496",310,8.11,31.3,10.3,MS33649-10 (0.875-14 UNF-2B),idk rn,https://www.luxfercylinders.com/product/l6x-composite-cylinder/
+T188C,Luxfer,"Type 3, DOT",18.1,"4,496",340,8.11,31.3,10.2,MS33649-10 (0.875-14 UNF-2B),idk rn,https://www.luxfercylinders.com/product/l6x-composite-cylinder/
+T200A,Luxfer,"Type 3, DOT",26.8,"3,292",227,10.12,29.29,11.4,MS33649-16 (1.3125-12 UN2B),idk rn,https://www.luxfercylinders.com/product/l6x-composite-cylinder/
+CRPIII-190-18.0-30-T,Zhejiang Kaibo,Type 3,18,4351.14,300,8.0708705,31.2992,11,idk,idk rn,https://www.kbcylinders.com/18-liter-multi-use-featherweight-carbon-fiber-respiratory-gas-cylinder-product/
+CRPIII-192-20.0-30-T,ALSAFE,Type 3?,20,4351.14,300,8.26772,33.4646,9,idk,idk rn,https://alsafeintl.com/industry/fire-rescue/
+CRPIII-192-20-30-T,Snow Rain,Type 3?,20,4351.14,300,8.18898,33.0709,9,idk,idk rn,https://alsafeintl.com/industry/fire-rescue/
+WOGC-208-20.0-30-T,WOBO,Type 3?,20,4351.14,300,8.18898,33.4646,9,idk,idk rn,
+test1,test,doesn’t matter,24,4000,300,8,25,8,idk,idk,
+test2,test,doesn’t matter,26,4000,300,8,25,8,idk,idk,
+test3,test,doesn’t matter,28,4000,300,8,25,8,idk,idk,

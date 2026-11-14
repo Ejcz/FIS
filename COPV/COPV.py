@@ -218,7 +218,7 @@ def use_bottle(P_b0, V_b):
     m_avail = V_b*(rho_b0-rho_end)
     for i in range(50):
         if m_avail < m_pres:
-            return {"rho_margin":(m_avail-m_pres)/V_b}
+            return {"rho_margin":(m_avail-m_pres)/V_b, "T_margin":propssi("T", "S", S, "P", P_tmin, "nitrogen")-T_rating}
         rho_b1 = rho_b0-m_pres/V_b
         u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen")
         u_b1 = propssi("UMASS", "S", S, "D", rho_b1, "nitrogen")
@@ -230,7 +230,7 @@ def use_bottle(P_b0, V_b):
             break
 
     if m_pres > m_avail:
-        return {"rho_margin":(m_avail-m_pres)/V_b}
+        return {"rho_margin":(m_avail-m_pres)/V_b, "T_margin":propssi("T", "S", S, "P", P_b0, "nitrogen")-T_rating}
 
     m_used = 0 #kg
     rho_b = rho_b0-(m_used+m_pres)/V_b #need to recalculate these after m_pres calc
@@ -258,6 +258,7 @@ def use_bottle(P_b0, V_b):
         P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
         time += dt
     T_f = propssi("T", "S", S, "D", rho_b, "nitrogen")
+    T_margin = T_f - T_rating
     m_excess = rho_b * V_b - rho_end * V_b
 
     print(f"m_used: {m_used:.3f} kg in {time:.3f}s")
@@ -267,6 +268,7 @@ def use_bottle(P_b0, V_b):
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
     output = {
         "rho_margin":rho_b-rho_end,
+        "T_margin":T_margin,
         "mdots_LOx_max":max(mdots_LOx),
         "mdots_IPA_max":max(mdots_IPA),
         "mdots_total_max":max(mdots_total),
@@ -294,7 +296,7 @@ else:
     P_fillmax = P_hi #if not, P_lo always < P_hi and P_lo basically always fulfills the temperature requirement so P_hi also fulfills temperature requirement within a realistic range (we're not going above 6 ksi)
 
 def solve_fill(V_b, P_rating):
-    hi = P_rating #something's sketchy? come back here
+    hi = min(P_rating, P_fillmax) #something's sketchy? come back here
     margin_lo = use_bottle(P_lo, V_b)["rho_margin"]
     margin_hi = use_bottle(hi, V_b)["rho_margin"]
     if margin_hi < 0:
@@ -304,6 +306,16 @@ def solve_fill(V_b, P_rating):
     P_fill = optimize.brentq(lambda P: use_bottle(P, V_b)["rho_margin"], P_lo, hi)
     return P_fill, "ok"
 
+def solve_fill1(V_b, P_rating):
+    hi = P_rating #something's sketchy? come back here
+    margin_lo = use_bottle(P_lo, V_b)["T_margin"]
+    margin_hi = use_bottle(hi, V_b)["T_margin"]
+    if margin_hi >= 0:
+        return hi, "cooked" #kinda sketch, come back here
+    elif margin_lo < 0:
+        return P_lo, "all good"
+    P_fill = optimize.brentq(lambda P: use_bottle(P, V_b)["T_margin"], P_lo, hi)
+    return P_fill, "ok"
 
 def usebottle(P_fill, V_b, partnum, OD, man):
     output = use_bottle(P_fill, V_b)
@@ -345,7 +357,7 @@ for P_psi, V_L, partnum, OD, man in zip(P_candidates, V_candidates, partnums, OD
     P_psi = float(P_psi)*6894.757
     print("---------------------------------------------------------------------------------------")
     print(f"{man} {partnum}\n")
-    P_fill, status = solve_fill(V_b, P_psi)
+    P_fill, status = solve_fill1(V_b, P_psi) #adjust: solver or solver 1
     print(f"\n")
     statuses.append(status)
     usebottle(P_fill, V_b, partnum, float(OD), man)
