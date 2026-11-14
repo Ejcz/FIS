@@ -45,11 +45,14 @@ expl_times = []
 part_nums = []
 COPV_ODs = []
 statuses = []
+bweights = []
+BPs = []
+BTs = []
 
 #constants/variables
 Vdot_LOx = 0.001111306 #m^3/s, nominal
 mdot_LOx = 1.268 #kg/s
-CF = 2
+CF = 1.5 #adjust: collapse factor
 m_LOx = 10*mdot_LOx #kg, nominal
 Vdot_IPA = 0.001086247 #m^3/s, nominal
 mdot_IPA = 0.932 #kg/s
@@ -208,6 +211,8 @@ def use_bottle(P_b0, V_b):
     mdots_LOx = []
     mdots_IPA = []
     mdots_total = []
+    Ps = []
+    Ts = []
     S = propssi("S", "T", T_b0, "P", P_b0, "nitrogen") #J/kgK, flow assumed to be isentropic so specific S stays constant
     rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
     rho_end = propssi("D", "P", P_tmin, "S", S, "nitrogen") #kg/m^3
@@ -252,12 +257,15 @@ def use_bottle(P_b0, V_b):
         mdots_LOx.append(mdot_LOx)
         mdots_IPA.append(mdot_IPA)
         mdots_total.append(mdot_total)
+        Ps.append(P_b/6894.757)
+        Ts.append(propssi("T", "S", S, "P", P_b, "nitrogen"))
 
         m_used += mdot_total * dt
         rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
         P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
         time += dt
-    T_f = propssi("T", "S", S, "D", rho_b, "nitrogen")
+    T_bf = propssi("T", "S", S, "D", max(rho_b, rho_end), "nitrogen") #end of burn
+    T_f = propssi("T", "S", S, "D", rho_end, "nitrogen") #end of expulsion
     T_margin = T_f - T_rating
     m_excess = rho_b * V_b - rho_end * V_b
 
@@ -269,6 +277,8 @@ def use_bottle(P_b0, V_b):
     output = {
         "rho_margin":rho_b-rho_end,
         "T_margin":T_margin,
+        "P_max":max(Ps),
+        "T_max":max(Ts),
         "mdots_LOx_max":max(mdots_LOx),
         "mdots_IPA_max":max(mdots_IPA),
         "mdots_total_max":max(mdots_total),
@@ -278,6 +288,7 @@ def use_bottle(P_b0, V_b):
         "T_b1":T_b1,
         "m_pres":m_pres,
         "T_f":T_f,
+        "T_bf":T_bf,
         "mdots_total":mdots_total,
         "time":time
         }
@@ -301,27 +312,33 @@ def solve_fill(V_b, P_rating):
     margin_hi = use_bottle(hi, V_b)["rho_margin"]
     if margin_hi < 0:
         return hi, "cooked" #kinda sketch, come back here
-    elif margin_lo > 0:
+    elif margin_lo >= 0:
         return P_lo, "all good"
     P_fill = optimize.brentq(lambda P: use_bottle(P, V_b)["rho_margin"], P_lo, hi)
     return P_fill, "ok"
 
 def solve_fill1(V_b, P_rating):
-    hi = P_rating #something's sketchy? come back here
-    margin_lo = use_bottle(P_lo, V_b)["T_margin"]
-    margin_hi = use_bottle(hi, V_b)["T_margin"]
-    if margin_hi >= 0:
-        return hi, "cooked" #kinda sketch, come back here
-    elif margin_lo < 0:
-        return P_lo, "all good"
-    P_fill = optimize.brentq(lambda P: use_bottle(P, V_b)["T_margin"], P_lo, hi)
-    return P_fill, "ok"
+    if use_bottle(P_rating, V_b)["rho_margin"] < 0:
+        return P_rating, "cooked" #if bottle can't last depl time at max GN2
+    elif use_bottle(P_lo, V_b)["rho_margin"] >= 0:
+        P_fill = P_lo #if bottle always makes depl time
+    else: #find pressure that just makes depl time
+        P_fill = optimize.brentq(lambda P: use_bottle(P, V_b)["rho_margin"], P_lo, P_rating)
+    if P_fill <= P_fillmax:
+        return P_fill, "ok"
+
+    if use_bottle(P_rating, V_b)["T_bf"] < T_rating: #if rated pressure never fulfills temperature requirement
+        return P_rating, "cooked"
+    P_fill1 = optimize.brentq(lambda P: use_bottle(P, V_b)["T_bf"] - T_rating, P_fill, P_rating) #find fill pressure that just makes temperature requirement
+    return P_fill1, "ok at burn end"
 
 def usebottle(P_fill, V_b, partnum, OD, man):
     output = use_bottle(P_fill, V_b)
     x1.append(P_fill/6894.757293) #psi, come back here after solver
     y1.append(1000*V_b) #L
     mdots1.append((output["mdots_LOx_max"], output["mdots_IPA_max"], output["mdots_total_max"]))
+    BPs.append(output["P_max"])
+    BTs.append((output["T_max"]))
     excesses.append(output["m_excess"])
     fill_masses1.append(output["fill_mass"])
     press_masses1.append(output["m_pres"])
@@ -348,8 +365,9 @@ P_candidates = readCSV(filename, "Rated pressure (psi)")
 partnums = readCSV(filename, "Part #")
 ODs = readCSV(filename, "Diameter (in)")
 mans = readCSV(filename, "Company")
+weights = readCSV(filename, "Weight (kg)")
 
-for P_psi, V_L, partnum, OD, man in zip(P_candidates, V_candidates, partnums, ODs, mans, strict=True):
+for P_psi, V_L, partnum, OD, man, weight in zip(P_candidates, V_candidates, partnums, ODs, mans, weights, strict=True):
     if float(V_L) > V_max:
         continue
     V_b = float(V_L)/1000
@@ -357,18 +375,19 @@ for P_psi, V_L, partnum, OD, man in zip(P_candidates, V_candidates, partnums, OD
     P_psi = float(P_psi)*6894.757
     print("---------------------------------------------------------------------------------------")
     print(f"{man} {partnum}\n")
-    P_fill, status = solve_fill1(V_b, P_psi) #adjust: solver or solver 1
+    P_fill, status = solve_fill1(V_b, P_psi)# come back here for solver
     print(f"\n")
     statuses.append(status)
     usebottle(P_fill, V_b, partnum, float(OD), man)
+    bweights.append(weight)
 
 
 points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses, T_fs, Tcolors, all_mdots, m_useds), key = lambda p: p[0])
 sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots, sorted_m_useds = zip(*points)
 ax[0,0].plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
 ax[1,0].plot(sorted_y, sorted_Tfs, color = "gray", linestyle = "-")
-points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, excesses, expl_times, part_nums, COPV_ODs, statuses), key = lambda p: p[12])
-sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_excesses, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_statuses = zip(*points1)
+points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, excesses, expl_times, part_nums, COPV_ODs, statuses, bweights, BPs, BTs), key = lambda p: p[12])
+sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_excesses, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_statuses, sorted_weights, sorted_BPs, sorted_BTs = zip(*points1)
 
 csvname = f"{T_amb}K_COPVs_transient.csv"
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -377,15 +396,15 @@ csvname = os.path.join(output_dir, csvname)
 with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["Part_num", "OD_in", "P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
-                     "mdot_total_max_kg_s", "all_mdots_kg_s", "T_f_ok", "expl_time_s"])
-    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs):
-        writer.writerow([pn, od, px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext])
+                     "mdot_total_max_kg_s", "all_mdots_kg_s", "T_f_ok", "expl_time_s", "weight_kg", "Ps_psi", "Ts_K"])
+    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, kg, bps, bts in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_weights, sorted_BPs, sorted_BTs):
+        writer.writerow([pn, od, px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext, kg, bps, bts])
 
 sc = ax[0,0].scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
 sc1 = ax[1,0].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
 
 m_total = [mu + mp for mu, mp in zip(sorted_m_useds, sorted_press_masses)]
-P_grid = np.linspace(min(sorted_x)*0.95, max(sorted_x)*1.05, 80)
+P_grid = np.linspace(min(sorted_x)*0.95, max(sorted_x)*1.25, 80)
 V_grid = np.linspace(min(sorted_y)*0.95, V_max, 80)
 T_grid = np.full((len(V_grid), len(P_grid)), np.nan)
 for i, P in enumerate(P_grid):
@@ -424,41 +443,8 @@ params = (
     f"V_utotal      {V_utotal*1000:.2f}L\n"
 )
 
-cooked_bs = (
-    f"cooked:\n"
-)
-ok_bs = (
-    f"ok:\n"
-)
-allgood_bs = (
-    f"all good:\n"
-)
-
-cookeds = []
-oks = []
-allgoods = []
-for s in range(len(sorted_statuses)):
-    if sorted_statuses[s] == "cooked":
-        cookeds.append(sorted_part_nums[s])
-    elif sorted_statuses[s] == "allgood":
-        allgoods.append(sorted_part_nums[s])
-    elif sorted_statuses[s] == "ok":
-        oks.append(sorted_part_nums[s])
-
-cookedi = 0
-oki = 0
-for c in cookeds:
-    cooked_bs += f"{c}\n"
-for o in oks:
-    ok_bs += f"{o}\n"
-for a in allgoods:
-    allgood_bs += f"{a}\n"
-
 
 ax[1,1].text(0.02, 0.98, params, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
-#ax[1,1].text(0.6, 0.98, cooked_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
-#ax[1,1].text(0.02, 0.30, ok_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
-#ax[1,1].text(0.02, 0.02, allgood_bs, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
 
 cursor1 = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
 @cursor1.connect("add")

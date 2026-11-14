@@ -114,8 +114,8 @@ for i in range(len(COPVs)):
     machs.append([max(up_machs),max(down_machs)])
     up_SF_ys.append(up_P_y/P_b0)
     up_SF_bs.append(up_P_b/P_b0)
-    down_SF_ys.append(down_P_y/P_b0)
-    down_SF_bs.append(down_P_b/P_b0)
+    down_SF_ys.append(down_P_y/P_f)
+    down_SF_bs.append(down_P_b/P_f)
 
 csvname = f"{filename[0:3]}K_{OD_up}upOD_{t_up}upt_{OD_down}downOD_{t_down}downt.csv"
 with open(csvname, "w", newline="") as f:
