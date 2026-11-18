@@ -43,8 +43,8 @@ def size(OD, ID):
     ID *= 0.0254
     area = constants.pi*((ID/2)**2)
 
-    P_y = S_y*((OD**2)-(ID**2))/((OD**2)+(ID**2)) #yield pressure
-    P_b = UTS*((OD**2)-(ID**2))/((OD**2)+(ID**2)) #burst pressure
+    P_y = S_y*((OD**2)-(ID**2))/(2*(OD**2)) #tresca yield pressure
+    P_b = UTS*((OD**2)-(ID**2))/(2*(OD**2)) #tresca burst pressure
 
     return area, P_y, P_b
 
