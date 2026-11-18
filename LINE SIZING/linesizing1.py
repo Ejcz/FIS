@@ -60,11 +60,6 @@ def calcMach(P0, h0, S0, mdot, area):
     M = v/A
     return M
 
-def calcFlow(P0, h0, S0, mdot, oarea):
-
-
-    return 
-
 filedir = "C:/Users/Chris/Documents/Github/FIS/COPV/outputs/" #adjust: CSV file directory
 filename = input("Filename: ")
 if not filename.endswith(".csv"):

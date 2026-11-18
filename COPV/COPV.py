@@ -47,7 +47,6 @@ COPV_ODs = []
 statuses = []
 bweights = []
 BPs = []
-BTs = []
 
 #constants/variables
 Vdot_LOx = 0.001111306 #m^3/s, nominal
@@ -59,11 +58,11 @@ mdot_IPA = 0.932 #kg/s
 m_IPA = 9.82 #kg, max
 P_t = 3548704 #Pa, postreg P. inconsistent? come back here
 P_tmin = 6894757.293 #Pa, min P into reg
-T_amb = 300 #K adjust: ambient temperature
+T_amb = 285 #K adjust: ambient temperature
 V_uLOx = 0.00340 #m^3
 V_uIPA = 0.00307 #m^3
 V_utotal = 0.00699 #m^3
-T_b0 = 300 #K adjust: initial bottle temperature
+T_b0 = 285 #K adjust: initial bottle temperature
 dt = 0.05 #s
 depl_time = max(m_LOx/mdot_LOx, m_IPA/mdot_IPA) #s
 P_step = 20 #psi step
@@ -75,8 +74,8 @@ T_rating = 215.15 #K
 T_tol = 0 #K, come back here
 press = "idk"
 
-D_orifice = 0.094 #in
-A_orifice = ((D_orifice*0.0254/2)**2)*3.141592 #adjust: orifice area in m^2
+D_orifice = 0.125 #in adjust: orifice diameter
+A_orifice = ((D_orifice*0.0254/2)**2)*3.141592
 C_d = 0.8 #flow coefficient, check api 520/521
 A_orifice_eff = A_orifice * C_d
 LID = 0.26*0.0254 #tubing ID in m
@@ -272,7 +271,7 @@ def tryP_b0(P_b0):
     m_useds.append(output["m_used"])
 
 #trying and plotting COPVs
-def use_bottle(P_b0, V_b):
+def use_bottle(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? check reg flow curve)
     time = 0 #s
     m_used = 0 #kg
     m_pres = 0.08 #kg, initial guess
@@ -383,7 +382,6 @@ def use_bottle(P_b0, V_b):
         "P_inregs":P_inregs,
         "T_margin":T_margin,
         "P_max":max(Ps),
-        "T_max":max(Ts),
         "mdots_LOx_max":max(mdots_LOx),
         "mdots_IPA_max":max(mdots_IPA),
         "mdots_total_max":max(mdots_total),
@@ -486,11 +484,13 @@ def solve_fill1(V_b, P_rating):
     else: #find pressure that just makes depl time
         P_fill = optimize.brentq(lambda P: burn_bottle(P, V_b)["rho_margin"], P_lo, P_rating)
 
+    if burn_bottle(P_rating, V_b)["T_bf"] < T_rating:
+        return P_rating, "cooked"
+    if burn_bottle(P_fill, V_b)["T_bf"] < T_rating:
+        P_fill = optimize.brentq(lambda P: burn_bottle(P, V_b)["T_bf"] - T_rating, P_fill, P_rating)
     if endT(P_fill) >= T_rating:
         return P_fill, "ok"
-    if burn_bottle(P_fill, V_b)["T_bf"] >= T_rating:
-        return P_fill, "ok at burn end"
-    return P_fill, "cooked"
+    return P_fill, "ok at burn end"
 
 def usebottle(P_fill, V_b, partnum, OD, man, status, weight):
     output = use_bottle(P_fill, V_b)
@@ -503,7 +503,6 @@ def usebottle(P_fill, V_b, partnum, OD, man, status, weight):
     y1.append(1000*V_b) #L
     mdots1.append((output["mdots_LOx_max"], output["mdots_IPA_max"], output["mdots_total_max"]))
     BPs.append(output["P_max"])
-    BTs.append((output["T_max"]))
     excesses.append(output["m_excess"])
     fill_masses1.append(output["fill_mass"])
     press_masses1.append(output["m_pres"])
@@ -551,8 +550,8 @@ points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses
 sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots, sorted_m_useds = zip(*points)
 ax[0,0].plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
 ax[1,0].plot(sorted_y, sorted_Tfs, color = "gray", linestyle = "-")
-points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, excesses, expl_times, part_nums, COPV_ODs, statuses, bweights, BPs, BTs), key = lambda p: p[12])
-sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_excesses, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_statuses, sorted_weights, sorted_BPs, sorted_BTs = zip(*points1, strict = True)
+points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, excesses, expl_times, part_nums, COPV_ODs, statuses, bweights, BPs), key = lambda p: p[12])
+sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_excesses, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_statuses, sorted_weights, sorted_BPs = zip(*points1, strict = True)
 
 csvname = f"{T_amb}K_COPVs_transient.csv"
 output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
@@ -561,9 +560,9 @@ csvname = os.path.join(output_dir, csvname)
 with open(csvname, "w", newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["Part_num", "OD_in", "P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
-                     "mdot_total_max_kg_s", "all_mdots_kg_s", "T_f_ok", "expl_time_s", "weight_kg", "Ps_psi", "Ts_K"])
-    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, kg, bps, bts in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_weights, sorted_BPs, sorted_BTs):
-        writer.writerow([pn, od, px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext, kg, bps, bts])
+                     "mdot_total_max_kg_s", "all_mdots_kg_s", "everything_ok", "expl_time_s", "weight_kg", "Ps_psi", "Ts_K"])
+    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, kg, bps in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_weights, sorted_BPs):
+        writer.writerow([pn, od, px, P1, vy, T1, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext, kg, bps])
 
 sc = ax[0,0].scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
 sc1 = ax[1,0].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
