@@ -1,29 +1,21 @@
 from CoolProp.CoolProp import PropsSI as propssi
+import CoolProp.CoolProp as CP
 from scipy import integrate, optimize, constants
 import numpy as np
 import matplotlib.pyplot as plt
 import mplcursors
 import csv
 import os
+import io
+import contextlib
+from multiprocessing import Pool
 
 #come back here: debug the end temperature or contour being weird
-plt.close()
+#figure is created inside the __main__ block at the bottom (worker processes import this file and must not make plots)
 x = []
 y = []
 x1 = []
 y1 = []
-fig, ax = plt.subplots(2, 2, figsize=(8,8), layout = "constrained")
-ax[0,0].set_xlabel("Fill pressure (psi)")
-ax[0,0].set_ylabel("Bottle volume (L)")
-ax[0,0].grid(True)
-ax[1,0].set_ylabel("End temperature (K)")
-ax[1,0].set_xlabel("Bottle volume (L)")
-ax[1,0].grid(True)
-ax[0,1].set_xlabel("Rated pressure (psi)")
-ax[0,1].set_ylabel("Bottle volume (L)")
-ax[0,1].grid(True)
-ax[1,1].set_xlabel("Rated pressure (psi)")
-ax[1,1].set_ylabel("Bottle volume (L)")
 colors = []
 mdots = []
 mdots1 = []
@@ -121,6 +113,25 @@ LID = 0.26*0.0254 #tubing ID in m
 LA = (LID/2)**(2)*3.141592 #tubing area
 P_loss = 0 #pressure loss across orifice
 
+P_XTOL = 1.0 #Pa, brentq tolerance for pressure solves (default was ~1e-12 Pa, way past what matters)
+
+#CoolProp low-level state: much faster than PropsSI (no string parsing / fluid setup per call).
+#One shared state per process; read the values you need right after each update.
+N2 = CP.AbstractState("HEOS", "Nitrogen")
+def N2_PS(P, S): #state from pressure + entropy
+    N2.update(CP.PSmass_INPUTS, P, S)
+    return N2
+def N2_DS(rho, S): #state from density + entropy
+    N2.update(CP.DmassSmass_INPUTS, rho, S)
+    return N2
+def N2_HP(h, P): #state from enthalpy + pressure
+    N2.update(CP.HmassP_INPUTS, h, P)
+    return N2
+
+#ullage starting state for fill_mass, constant so computed once
+rho_u0 = propssi("D", "P", 101325, "T", T_amb, "nitrogen")
+u_u0 = propssi("UMASS", "T", T_amb, "P", 101325, "air") #note: air and nitrogen use different CoolProp reference states, see review notes
+
 
 #filename = "C:/Users/Chris/Documents/Github/FIS/COPV/GN2_COPV_Options.csv" #adjust: COPV options filename
 filename = os.path.join(os.path.dirname(os.path.abspath(__file__)), "GN2_COPV_Options.csv")
@@ -135,15 +146,17 @@ def readCSV(filename, colname):
     return data
 
 
+rho_hi_fill = 2*propssi("D", "P", P_t, "T", T_amb, "nitrogen") #for fill_mass upper bound
+
 def fill_mass(V_u, h_in):
-    m_0 = V_u * propssi("D", "P", 101325, "T", T_amb, "nitrogen")
-    u_u0 = propssi("UMASS", "T", T_amb, "P", 101325, "air")
+    m_0 = V_u * rho_u0
     def f(dm):
         m_ppres = m_0 + dm
         u_f = (m_0*u_u0 + dm*h_in)/m_ppres
-        return propssi("P", "D", m_ppres/V_u, "UMASS", u_f, "nitrogen") - P_t
-    dm_hi = 2*propssi("D", "P", P_t, "T", T_amb, "nitrogen")*V_u #just a safe upper bound, can mostly ignore
-    return optimize.brentq(f, 0, dm_hi)
+        N2.update(CP.DmassUmass_INPUTS, m_ppres/V_u, u_f)
+        return N2.p() - P_t
+    dm_hi = rho_hi_fill*V_u #just a safe upper bound, can mostly ignore
+    return optimize.brentq(f, 0, dm_hi, xtol=1e-9) #kg
 
 class ThroatCondenses(Exception):
     pass #claude help
@@ -154,56 +167,59 @@ class OrificeChokes(Exception):
 def solve_sonic(S, P_b, h):
     def f(P):
         try:
-            A = propssi("A", "S", S, "P", P, "nitrogen")
-            hP = propssi("HMASS", "S", S, "P", P, "nitrogen")
+            st = N2_PS(P, S) #one state update gives both A and h
+            A = st.speed_sound()
+            hP = st.hmass()
         except ValueError:
             return 1e6
         return max(0, 2*(h-hP))**(1/2) - A
     hi = 0.9999*P_b
 
     if f(hi) >= 0:
-        raise ValueError
+        raise ValueError("solve_sonic: flow already sonic at bottle pressure")
     for frac in (0.4, 0.2, 0.05):
         lo = frac * P_b
         if f(lo) > 0: #low guess is supersonic
-            P_fill = optimize.brentq(f, lo, hi)
+            P_fill = optimize.brentq(f, lo, hi, xtol=P_XTOL)
             if abs(f(P_fill)) > 3:
                 raise ThroatCondenses
             return P_fill
-    raise ValueError
+    raise ValueError("solve_sonic: no sonic point found")
 
 def solve_throatP(Area, h, mdot, S, sonicP, P_b):
-    def f(mdot, P, Area, S): #velocity
-        return mdot/(propssi("D", "P", P, "S", S, "nitrogen")*Area)
-    def g(h0, P): #velocity
-        return max(0, (2*(h0-propssi("HMASS", "P", P, "S", S, "nitrogen"))))**(1/2)
-    throat_P = optimize.brentq(lambda P: f(mdot, P, Area, S)-g(h, P), sonicP, 0.999999*P_b)
-    return throat_P, f(mdot, throat_P, Area, S) #are brackets ok?
+    def resid(P): #continuity velocity - energy velocity, one state update per guess
+        st = N2_PS(P, S)
+        v_cont = mdot/(st.rhomass()*Area)
+        v_energy = max(0, 2*(h-st.hmass()))**(1/2)
+        return v_cont - v_energy
+    throat_P = optimize.brentq(resid, sonicP, 0.999999*P_b, xtol=P_XTOL)
+    return throat_P, mdot/(N2_PS(throat_P, S).rhomass()*Area) #are brackets ok?
 
-def choke(Area, S, h, P_b):
-    P = solve_sonic(S, P_b, h)
-    rho = propssi("D", "S", S, "P", P, "nitrogen")
-    A = propssi("A", "S", S, "P", P, "nitrogen")
-    return Area*rho*A #choke flow rate
+def choke(Area, S, h, P_b, sonicP = None): #pass sonicP if already solved, saves a second solve_sonic
+    P = solve_sonic(S, P_b, h) if sonicP is None else sonicP
+    st = N2_PS(P, S)
+    return Area*st.rhomass()*st.speed_sound() #choke flow rate
 
 def solve_recovery(LA, mdot, P_o, v_o, h_0, P_up):
-    S = propssi("S", "P", P_up, "HMASS", h_0, "nitrogen") #upstream conditions
-    h_o = propssi("HMASS", "P", P_o, "S", S, "nitrogen") #specific enthalpy thru orifice
+    S = N2_HP(h_0, P_up).smass() #upstream conditions
+    h_o = N2_PS(P_o, S).hmass() #specific enthalpy thru orifice
     v_o = (2*(h_0-h_o))**(1/2)
 
-    rho_d = propssi("D", "P", P_o, "HMASS", h_o, "nitrogen") #initial guess
+    rho_d = N2_HP(h_o, P_o).rhomass() #initial guess
     v_d = mdot/(rho_d*LA) #downstream velocity
     P_d0 = 0 #initial state
-    error = 1 #placeholder
-    while abs(error) > 0.0001:
+    error = 1e9 #placeholder
+    for i in range(100): #was an unbounded while loop with 0.0001 Pa tolerance: CoolProp's own noise (~1e-3 Pa at 2500 psi) could keep it from ever stopping
         h_d = h_0 - 0.5*(v_d)**(2)
         P_d = P_o + mdot/(LA)*(v_o-v_d)
-        rho_d = propssi("D", "P", P_d, "HMASS", h_d, "nitrogen")
+        rho_d = N2_HP(h_d, P_d).rhomass()
         v_d = mdot/(rho_d*LA)
 
         error = abs(P_d - P_d0)
         P_d0 = P_d
-    return P_d
+        if error < P_XTOL: #1 Pa
+            return P_d
+    raise ValueError(f"solve_recovery: no convergence after 100 iterations (last change {error:.3g} Pa)")
 
 
 #burn start to end
@@ -216,6 +232,7 @@ def size_bottle(P_b0, m_usedguess = 2.2): #P_b0 = before prepressurization
     S = propssi("S", "T", T_b0, "P", P_b0, "nitrogen") #J/kgK, flow assumed to be isentropic so specific S stays constant
     rho_b0 = propssi("D", "P", P_b0, "T", T_b0, "nitrogen") #kg/m^3, flow from bottle assumed to be adiabatic
     rho_end = propssi("D", "P", P_tmin, "S", S, "nitrogen") #kg/m^3
+    u_b0 = N2_DS(rho_b0, S).umass() #specfic internal energy before pressurization, same every iteration
 
     while error > V_error:
         time = 0 #s
@@ -223,11 +240,10 @@ def size_bottle(P_b0, m_usedguess = 2.2): #P_b0 = before prepressurization
         mdots_LOx = [] #lists are for GN2 btw
         mdots_IPA = []
         mdots_total = []
-        
+
         V_b = m_usedguess/(rho_b0-rho_end) #m^3, guess bottle volume based on m_used
         rho_b1 = rho_b0-m_pres/V_b #density after pressurization, before burn
-        u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen") #specfic internal energy before pressurization
-        u_b1 = propssi("UMASS", "S", S, "D", rho_b1, "nitrogen") #specfic internal energy after pressurization
+        u_b1 = N2_DS(rho_b1, S).umass() #specfic internal energy after pressurization
         h_in = V_b*(rho_b0*u_b0-rho_b1*u_b1)/m_pres #enthalpy of GN2 going into reg (and out of bottle) during pressurization, J/kg
 
         # m_presLOx = fill_mass(V_uLOx, h_in) #no line volume, need to play around with CF. kinda sketch
@@ -241,9 +257,9 @@ def size_bottle(P_b0, m_usedguess = 2.2): #P_b0 = before prepressurization
         T_b1 = propssi("T", "P", P_b1, "D", rho_b1, "nitrogen")
         
         while (time <= depl_time):
-            h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-            rho_in = propssi("D", "P", P_t, "HMASS", h_b, "nitrogen") #rho GN2 going into tanks
-            
+            h_b = N2_DS(rho_b, S).hmass() #isentropic flow, specific H bottle = specific H tanks
+            rho_in = N2_HP(h_b, P_t).rhomass() #rho GN2 going into tanks
+
             mdot_LOx = Vdot_LOx * CF * rho_in #flow of GN2 into LOx tank, kg/s does velocity decrease when paths split (ignoring friction)? come back here
             mdot_IPA = Vdot_IPA * rho_in #flow of GN2 into IPA tank, kg/s
             mdot_total = mdot_LOx + mdot_IPA
@@ -337,8 +353,8 @@ def use_bottle(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? c
     for i in range(50):
         m_pres = min(m_pres, m_avail*0.99999)
         rho_b1 = rho_b0-m_pres/V_b
-        u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen")
-        u_b1 = propssi("UMASS", "S", S, "D", rho_b1, "nitrogen")
+        u_b0 = N2_DS(rho_b0, S).umass()
+        u_b1 = N2_DS(rho_b1, S).umass()
         h_in = V_b*(rho_b0*u_b0-rho_b1*u_b1)/m_pres
         m_new = fill_mass(V_utotal, h_in) #can't account for CF_pp of LOx with this
         done = abs(m_pres - m_new) < 0.00001
@@ -368,27 +384,34 @@ def use_bottle(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? c
     P_inreg = P_b
     P_inregs = []
     while (time < depl_time) & (P_inreg > P_tmin ): #come back here: check outputs with check valve and also line flow
-        h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-        T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks. check this at the end? come back here
-        rho_in = propssi("D", "P", P_t, "T", T_in, "nitrogen") #rho GN2 going into tanks
-        
+        st = N2_DS(rho_b, S)
+        h_b = st.hmass() #isentropic flow, specific H bottle = specific H tanks
+        T_b = st.T() #temp of gn2 in bottle
+        st = N2_HP(h_b, P_t)
+        T_in = st.T() #T going into prop tanks. check this at the end? come back here
+        rho_in = st.rhomass() #rho GN2 going into tanks
+
         mdot_LOx = Vdot_LOx * CF * rho_in
         mdot_IPA = Vdot_IPA * rho_in
         mdot_total = mdot_LOx + mdot_IPA
 
         try:
             sonicP = solve_sonic(S, P_b, h_b)
-            mdot_choke = choke(A_orifice_eff, S, h_b, P_b)
+            mdot_choke = choke(A_orifice_eff, S, h_b, P_b, sonicP)
             choke_ratio = mdot_choke/mdot_total
             min_choke_ratio = min(choke_ratio, min_choke_ratio)
-            if (choke_ratio < 1) & (t_choke is None):
+            if choke_ratio < 1: #orifice can't pass the demand flow: bottle fails here
                 t_choke = time
-            mdot_capped = min(0.9999*mdot_choke, mdot_total)
-            P_throat, v_throat = solve_throatP(A_orifice_eff, h_b, mdot_capped, S, sonicP, P_b)
+                print(f"Orifice choked at {time:.3f}s and ratio {choke_ratio:.2f}")
+                break
+            P_throat, v_throat = solve_throatP(A_orifice_eff, h_b, mdot_total, S, sonicP, P_b)
             #deltaP = P_b - P_throat, come back here
-            P_inreg = solve_recovery(LA, mdot_capped, P_throat, v_throat, h_b, P_b)
+            P_inreg = solve_recovery(LA, mdot_total, P_throat, v_throat, h_b, P_b)
         except ThroatCondenses:
-            print(f"Orifice choked at {time:.3f}s and P_b {P_b/6894.757:.0f} psi")
+            print(f"Throat condensed at {time:.3f}s and P_b {P_b/6894.757:.0f} psi")
+            break
+        except ValueError as e: #property/solver failure: stop this bottle instead of crashing the whole run
+            print(f"Orifice solve failed at {time:.3f}s and P_b {P_b/6894.757:.0f} psi: {e}")
             break
         min_P_inreg = min(P_inreg, min_P_inreg)
 
@@ -400,19 +423,20 @@ def use_bottle(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? c
         mdots_total.append(mdot_total)
         Ps.append(P_b/6894.757)
         P_inregs.append(P_inreg/6894.757)
-        Ts.append(propssi("T", "S", S, "P", P_b, "nitrogen")) #temp of gn2 in bottle
+        Ts.append(T_b) #temp of gn2 in bottle
         Tins.append(T_in)
         times.append(time)
         mdots_choke.append(mdot_choke)
 
         m_used += mdot_total * dt
         rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
-        P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
-        
+        P_b = N2_DS(rho_b, S).p()
+
         time += dt
     if not mdots_total:
         return None
-    rho_end_eff = Ps[-1]-P_inregs[-1] #propssi("D", "S", S, "P", P_tmin + P_loss, "nitrogen")
+    loss_end = (Ps[-1]-P_inregs[-1])*6894.757 #Pa, bottle P - reg inlet P at the last step (orifice loss)
+    rho_end_eff = propssi("D", "S", S, "P", P_tmin + loss_end, "nitrogen") #bottle density where reg inlet hits P_tmin
     T_bf = propssi("T", "S", S, "D", max(rho_b, rho_end_eff), "nitrogen") #end of burn
     T_f = propssi("T", "S", S, "D", rho_end_eff, "nitrogen") #end of expulsion
     T_margin = T_f - T_rating
@@ -459,29 +483,31 @@ def stagnation_from_static(P, h0, mdot):
     v = 0.0
     for i in range(50):
         h = h0 - 0.5*(v**(2))
-        rho = propssi("D", "P", P, "HMASS", h, "nitrogen")
+        rho = N2_HP(h, P).rhomass()
         v_new = mdot/(rho*LA)
         if abs(v - v_new) < 0.001:
             v = v_new
             break
         v = v_new
     else:
-        raise ValueError
+        raise ValueError("stagnation_from_static: velocity did not converge")
 
     h = h0 - 0.5*(v**(2))
-    S = propssi("S", "P", P, "HMASS", h, "nitrogen")
-    P0 = propssi("P", "S", S, "HMASS", h0, "nitrogen")
-    M = v/propssi("A", "S", S, "HMASS", h, "nitrogen")
+    st = N2_HP(h, P) #static state: entropy and speed of sound
+    S = st.smass()
+    M = v/st.speed_sound()
+    N2.update(CP.HmassSmass_INPUTS, h0, S)
+    P0 = N2.p()
     return M, P0, S
 
 def tank_state(P_guess, h_b): #loopy solve: P_tank --> rho into tank --> mdot into tank --> pressure drop and recovery --> P_tank = P_set - loss + recovery
-    rho_in = propssi("D", "P", P_guess, "HMASS", h_b, "nitrogen") #rho into tank
+    rho_in = N2_HP(h_b, P_guess).rhomass() #rho into tank
     mdot_LOx = Vdot_LOx * rho_in * CF
     mdot_IPA = Vdot_IPA * rho_in
     mdot = mdot_LOx + mdot_IPA
     M, P0, S = stagnation_from_static(P_set, h_b, mdot) #nonisentropic flow across reg
     sonicP = solve_sonic(S, P0, h_b)
-    mdot_choke = choke(A_orifice_eff, S, h_b, P0)
+    mdot_choke = choke(A_orifice_eff, S, h_b, P0, sonicP)
     ratio = mdot_choke/mdot
     if ratio <= 1:
         raise OrificeChokes(ratio)
@@ -514,8 +540,8 @@ def use_bottle1(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? 
     for i in range(50):
         m_pres = min(m_pres, m_avail*0.99999)
         rho_b1 = rho_b0-m_pres/V_b
-        u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen")
-        u_b1 = propssi("UMASS", "S", S, "D", rho_b1, "nitrogen")
+        u_b0 = N2_DS(rho_b0, S).umass()
+        u_b1 = N2_DS(rho_b1, S).umass()
         h_in = V_b*(rho_b0*u_b0-rho_b1*u_b1)/m_pres
         m_new = fill_mass(V_utotal, h_in) #can't account for CF_pp of LOx with this
         done = abs(m_pres - m_new) < 0.00001
@@ -546,8 +572,10 @@ def use_bottle1(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? 
     max_P_intank = 0
     min_choke_ratio = np.inf
     while (time < depl_time) & (rho_b > rho_end): #come back here: check outputs with check valve and also line flow
-        h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-        T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks. check this at the end? come back here
+        st = N2_DS(rho_b, S)
+        h_b = st.hmass() #isentropic flow, specific H bottle = specific H tanks
+        T_b = st.T() #temp of gn2 in bottle
+        T_in = N2_HP(h_b, P_t).T() #T going into prop tanks. check this at the end? come back here
 
         try:
             for i in range(20):
@@ -564,6 +592,9 @@ def use_bottle1(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? 
         except ThroatCondenses:
             print(f"Throat condensed at {time:.3f}s and P_b {P_b/6894.757:.0f} psi")
             break
+        except ValueError as e: #property/solver failure: stop this bottle instead of crashing the whole run
+            print(f"Orifice solve failed at {time:.3f}s and P_b {P_b/6894.757:.0f} psi: {e}")
+            break
         min_P_intank = min(P_intank, min_P_intank)
 
         mdots_LOx.append(mdot_LOx)
@@ -574,14 +605,14 @@ def use_bottle1(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? 
         max_P_intank = max(max_P_intank, P_intank)
         Ps.append(P_b/6894.757)
         P_intanks.append(P_intank/6894.757)
-        Ts.append(propssi("T", "S", S, "P", P_b, "nitrogen")) #temp of gn2 in bottle
+        Ts.append(T_b) #temp of gn2 in bottle
         Tins.append(T_in)
         times.append(time)
         mdots_choke.append(mdot_choke)
 
         m_used += mdot_total * dt
         rho_b = rho_b0-(m_used+m_pres)/V_b #kg/m^3
-        P_b = propssi("P", "S", S, "D", rho_b, "nitrogen")
+        P_b = N2_DS(rho_b, S).p()
         
         time += dt
     if not mdots_total:
@@ -598,7 +629,7 @@ def use_bottle1(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? 
     print(f"Total max m dot: {max(mdots_total):.3f}kg/s @ {(mdots_total.index(max(mdots_total))+1)*dt:.3f}s")
     output = {
         "success":True,
-        "P_margin":min(min_P_intank - P_ullage_min, P_ullage_max - P_intank), #so this becomes difference btwn P_intank and desired ullage pressure
+        "P_margin":min(min_P_intank - P_ullage_min, P_ullage_max - max_P_intank), #so this becomes difference btwn P_intank and desired ullage pressure
         "rho_margin":rho_b-rho_end,
         "choke_ratio":min_choke_ratio,
         "t_choke":t_choke,
@@ -640,8 +671,8 @@ def burn_bottle(P_b0, V_b):
     for i in range(50):
         m_pres = min(m_pres, 0.9999*m_avail)
         rho_b1 = rho_b0-m_pres/V_b
-        u_b0 = propssi("UMASS", "S", S, "D", rho_b0, "nitrogen")
-        u_b1 = propssi("UMASS", "S", S, "D", rho_b1, "nitrogen")
+        u_b0 = N2_DS(rho_b0, S).umass()
+        u_b1 = N2_DS(rho_b1, S).umass()
         h_in = V_b*(rho_b0*u_b0-rho_b1*u_b1)/m_pres
         m_new = fill_mass(V_utotal, h_in) #can't account for CF_pp of LOx with this
         done = abs(m_pres - m_new) < 0.00001
@@ -657,9 +688,8 @@ def burn_bottle(P_b0, V_b):
     rho_b1 = rho_b0-m_pres/V_b #these are for the start of burn btw
 
     while time <= depl_time: #come back here: check outputs with check valve and also line flow
-        h_b = propssi("HMASS", "S", S, "D", rho_b, "nitrogen") #isentropic flow, specific H bottle = specific H tanks
-        T_in = propssi("T", "P", P_t, "Hmass", h_b, "nitrogen") #T going into prop tanks. check this at the end? come back here
-        rho_in = propssi("D", "P", P_t, "T", T_in, "nitrogen") #rho GN2 going into tanks
+        h_b = N2_DS(rho_b, S).hmass() #isentropic flow, specific H bottle = specific H tanks
+        rho_in = N2_HP(h_b, P_t).rhomass() #rho GN2 going into tanks
         
         mdot_LOx = Vdot_LOx * CF * rho_in
         mdot_IPA = Vdot_IPA * rho_in
@@ -708,22 +738,23 @@ def solve_fill(V_b, P_rating):
     return P_fill, "ok"
 
 def solve_fill1(V_b, P_rating):
-    if burn_bottle(P_rating, V_b)["rho_margin"] < 0:
+    at_rating = burn_bottle(P_rating, V_b) #used twice below, only run it once
+    if at_rating["rho_margin"] < 0:
         return P_rating, "cooked" #if bottle can't last depl time at max GN2
     elif burn_bottle(P_lo, V_b)["rho_margin"] >= 0:
         P_fill = P_lo #if bottle always makes depl time
     else: #find pressure that just makes depl time
-        P_fill = optimize.brentq(lambda P: burn_bottle(P, V_b)["rho_margin"], P_lo, P_rating)
+        P_fill = optimize.brentq(lambda P: burn_bottle(P, V_b)["rho_margin"], P_lo, P_rating, xtol=P_XTOL)
 
-    if burn_bottle(P_rating, V_b)["T_bf"] < T_rating:
+    if at_rating["T_bf"] < T_rating:
         return P_rating, "cooked"
     if burn_bottle(P_fill, V_b)["T_bf"] < T_rating:
-        P_fill = optimize.brentq(lambda P: burn_bottle(P, V_b)["T_bf"] - T_rating, P_fill, P_rating)
+        P_fill = optimize.brentq(lambda P: burn_bottle(P, V_b)["T_bf"] - T_rating, P_fill, P_rating, xtol=P_XTOL)
     if endT(P_fill) >= T_rating:
         return P_fill, "ok"
     return P_fill, "ok at burn end"
 
-def solve_fillloss(V_b, P_rating):
+def solve_fillloss(V_b, P_rating): #fill pressure for orifice UPSTREAM of the reg (orifice loss eats into reg inlet pressure)
     global P_loss
     P_loss = 0 #resetting P_loss for each bottle
     for i in range(6):
@@ -735,10 +766,31 @@ def solve_fillloss(V_b, P_rating):
         if abs(loss_new - P_loss) < 6894.757: #1 psi error for loss
             break
         P_loss = loss_new
-    return P_fill, status
+    return P_fill, status, out #out = use_bottle(P_fill) already, so it doesn't have to be rerun for plotting
 
-def usebottle(P_fill, V_b, partnum, OD, man, status, weight):
-    output = use_bottle(P_fill, V_b)
+def solve_fill_downstream(V_b, P_rating): #fill pressure for orifice DOWNSTREAM of the reg: nothing between bottle and reg inlet
+    global P_loss
+    P_loss = 0
+    return solve_fill1(V_b, P_rating)
+
+def evaluate_bottle(task): #everything for one bottle; runs in a worker process
+    P_rating, V_b, partnum, OD, man, weight = task
+    log = io.StringIO() #worker prints are collected and printed in order by the main process
+    with contextlib.redirect_stdout(log):
+        print("---------------------------------------------------------------------------------------")
+        print(f"{man} {partnum}\n")
+        print("Orifice upstream:")
+        P_fill, status, out_up = solve_fillloss(V_b, P_rating)
+        print("\nOrifice downstream:")
+        P_fill_down, status_down = solve_fill_downstream(V_b, P_rating)
+        out_down = use_bottle1(P_fill_down, V_b)
+        print(f"\n")
+    return {"V_b":V_b, "partnum":partnum, "OD":OD, "man":man, "weight":weight,
+            "P_fill":P_fill, "status":status, "out_up":out_up,
+            "P_fill_down":P_fill_down, "status_down":status_down, "out_down":out_down,
+            "log":log.getvalue()}
+
+def usebottle(P_fill, V_b, partnum, OD, man, status, weight, output):
     if output is None:
         print(f"{man} {partnum} skipped")
         return
@@ -773,8 +825,7 @@ def usebottle(P_fill, V_b, partnum, OD, man, status, weight):
     times1.append(output["times"])
     choke_mdots1.append(output["mdots_choke"])
 
-def usebottle1(P_fill, V_b, partnum, OD, man, status, weight):
-    output = use_bottle1(P_fill, V_b)
+def usebottle1(P_fill, V_b, partnum, OD, man, status, weight, output):
     if output is None:
         print(f"{man} {partnum} skipped")
         return
@@ -809,193 +860,228 @@ def usebottle1(P_fill, V_b, partnum, OD, man, status, weight):
     times2.append(output["times"])
     choke_mdots2.append(output["mdots_choke"])
 
-P_bsweep = 2000*6894.757293 #Pa, full fill pressure
-while P_bsweep <= 4700*6894.757293: #4700 psi, sweep end
-    tryP_b0(P_bsweep)
-    P_bsweep += P_step*6894.757293
+#Main run. Guarded so the worker processes (which import this file) don't rerun the sweep, plots and CSVs
+if __name__ == "__main__":
+    plt.close()
+    fig, ax = plt.subplots(2, 2, figsize=(8,8), layout = "constrained")
+    ax[0,0].set_xlabel("Fill pressure (psi)")
+    ax[0,0].set_ylabel("Bottle volume (L)")
+    ax[0,0].grid(True)
+    ax[1,0].set_ylabel("End temperature (K)")
+    ax[1,0].set_xlabel("Bottle volume (L)")
+    ax[1,0].grid(True)
+    ax[0,1].set_xlabel("Rated pressure (psi)")
+    ax[0,1].set_ylabel("Bottle volume (L)")
+    ax[0,1].grid(True)
+    ax[1,1].set_xlabel("Rated pressure (psi)")
+    ax[1,1].set_ylabel("Bottle volume (L)")
 
-V_candidates = readCSV(filename, "V (L)")
-P_candidates = readCSV(filename, "Rated pressure (psi)")
-partnums = readCSV(filename, "Part #")
-ODs = readCSV(filename, "Diameter (in)")
-mans = readCSV(filename, "Company")
-weights = readCSV(filename, "Weight (kg)")
+    V_candidates = readCSV(filename, "V (L)")
+    P_candidates = readCSV(filename, "Rated pressure (psi)")
+    partnums = readCSV(filename, "Part #")
+    ODs = readCSV(filename, "Diameter (in)")
+    mans = readCSV(filename, "Company")
+    weights = readCSV(filename, "Weight (kg)")
 
-for P_psi, V_L, partnum, OD, man, weight in zip(P_candidates, V_candidates, partnums, ODs, mans, weights, strict=True):
-    if float(V_L) > V_max:
-        continue
-    V_b = float(V_L)/1000
-    P_psi = P_psi.replace(",", "")
-    P_psi = float(P_psi)*6894.757
-    print("---------------------------------------------------------------------------------------")
-    print(f"{man} {partnum}\n")
-    P_fill, status = solve_fillloss(V_b, P_psi)# come back here for solver
-    print(f"\n")
-    usebottle(P_fill, V_b, partnum, float(OD), man, status, weight)
-    usebottle1(P_fill, V_b, partnum, float(OD), man, status, weight)
+    tasks = []
+    for P_psi, V_L, partnum, OD, man, weight in zip(P_candidates, V_candidates, partnums, ODs, mans, weights, strict=True):
+        if float(V_L) > V_max:
+            continue
+        V_b = float(V_L)/1000
+        P_psi = P_psi.replace(",", "")
+        P_psi = float(P_psi)*6894.757
+        tasks.append((P_psi, V_b, partnum, float(OD), man, weight))
+
+    #bottles are independent, so each one is solved in its own worker process (one per CPU core, minus one for the sweep)
+    with Pool(max(1, (os.cpu_count() or 2) - 1)) as pool:
+        pending = pool.map_async(evaluate_bottle, tasks)
+
+        #ideal-bottle sweep runs in this process while the workers do the bottles
+        P_bsweep = 2000*6894.757293 #Pa, full fill pressure
+        while P_bsweep <= 4700*6894.757293: #4700 psi, sweep end
+            tryP_b0(P_bsweep)
+            P_bsweep += P_step*6894.757293
+
+        results = pending.get()
+
+    for r in results: #same order as the CSV
+        print(r["log"], end="")
+        usebottle(r["P_fill"], r["V_b"], r["partnum"], r["OD"], r["man"], r["status"], r["weight"], r["out_up"])
+        usebottle1(r["P_fill_down"], r["V_b"], r["partnum"], r["OD"], r["man"], r["status_down"], r["weight"], r["out_down"])
 
 
-points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses, T_fs, Tcolors, all_mdots, m_useds), key = lambda p: p[0])
-sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots, sorted_m_useds = zip(*points)
-ax[0,0].plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
-ax[1,0].plot(sorted_y, sorted_Tfs, color = "gray", linestyle = "-")
-points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, excesses, expl_times, part_nums, COPV_ODs, statuses, bweights, BPs, T_bfs, choke_times), key = lambda p: p[12])
-sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_excesses, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_statuses, sorted_weights, sorted_BPs, sorted_T_bfs, sorted_choke_times = zip(*points1, strict = True)
-if x2:
-    points2 = sorted(zip(x2, y2, mdots2, fill_masses2, P_b1s2, T_b1s2, press_masses2, T_fs2, Tcolors2, all_mdots2, excesses2, expl_times2, part_nums2, COPV_ODs2, statuses2, bweights2, BPs2, T_bfs2, choke_times2), key = lambda p: p[12])
-    sorted_x2, sorted_y2, sorted_mdots2, sorted_fill_masses2, sorted_P_b1s2, sorted_Tb1s2, sorted_press_masses2, sorted_T_fs2, sorted_Tcolors2, sorted_all_mdots2, sorted_excesses2, sorted_expl_times2, sorted_part_nums2, sorted_COPV_ODs2, sorted_statuses2, sorted_weights2, sorted_BPs2, sorted_T_bfs2, sorted_choke_times2 = zip(*points2, strict = True)
+    points = sorted(zip(x, y, colors, mdots, fill_masses, P_b1s, T_b1s, press_masses, T_fs, Tcolors, all_mdots, m_useds), key = lambda p: p[0])
+    sorted_x, sorted_y, sorted_colors, sorted_mdots, sorted_fill_masses, sorted_Pb1s, sorted_Tb1s, sorted_press_masses, sorted_Tfs, sorted_Tcolors, sorted_all_mdots, sorted_m_useds = zip(*points)
+    ax[0,0].plot(sorted_x, sorted_y, color = "gray", linestyle = "-")
+    ax[1,0].plot(sorted_y, sorted_Tfs, color = "gray", linestyle = "-")
+    points1 = sorted(zip(x1, y1, mdots1, fill_masses1, P_b1s1, T_b1s1, press_masses1, T_fs1, Tcolors1, all_mdots1, excesses, expl_times, part_nums, COPV_ODs, statuses, bweights, BPs, T_bfs, choke_times), key = lambda p: p[12])
+    sorted_x1, sorted_y1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_Tcolors1, sorted_all_mdots1, sorted_excesses, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_statuses, sorted_weights, sorted_BPs, sorted_T_bfs, sorted_choke_times = zip(*points1, strict = True)
+    if x2:
+        points2 = sorted(zip(x2, y2, mdots2, fill_masses2, P_b1s2, T_b1s2, press_masses2, T_fs2, Tcolors2, all_mdots2, excesses2, expl_times2, part_nums2, COPV_ODs2, statuses2, bweights2, BPs2, T_bfs2, choke_times2), key = lambda p: p[12])
+        sorted_x2, sorted_y2, sorted_mdots2, sorted_fill_masses2, sorted_P_b1s2, sorted_Tb1s2, sorted_press_masses2, sorted_T_fs2, sorted_Tcolors2, sorted_all_mdots2, sorted_excesses2, sorted_expl_times2, sorted_part_nums2, sorted_COPV_ODs2, sorted_statuses2, sorted_weights2, sorted_BPs2, sorted_T_bfs2, sorted_choke_times2 = zip(*points2, strict = True)
 
 
-csvname = f"{T_amb}K_upstream{D_orifice}in.csv"
-output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
-os.makedirs(output_dir, exist_ok=True)
-csvname = os.path.join(output_dir, csvname)
-with open(csvname, "w", newline="") as f:
-    writer = csv.writer(f)
-    writer.writerow(["Part_num", "OD_in", "P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_bf_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
-                     "mdot_total_max_kg_s", "all_mdots_kg_s", "everything_ok", "expl_time_s", "weight_kg", "Ps_psi", "choke_time_s"]) #T_sk?
-    for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, kg, bps, T_bf, CT in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_weights, sorted_BPs, sorted_T_bfs, sorted_choke_times):
-        writer.writerow([pn, od, px, P1, vy, T1, T_bf, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext, kg, bps, CT])
-
-if x2:
-    csvname1 = f"{T_amb}K_downstream{D_orifice}in.csv"
-    output_dir1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
-    os.makedirs(output_dir1, exist_ok=True)
-    csvname1 = os.path.join(output_dir1, csvname1)
-    with open(csvname1, "w", newline="") as f:
+    csvname = f"{T_amb}K_upstream{D_orifice}in.csv"
+    output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+    os.makedirs(output_dir, exist_ok=True)
+    csvname = os.path.join(output_dir, csvname)
+    with open(csvname, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(["Part_num", "OD_in", "P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_bf_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
-                        "mdot_total_max_kg_s", "all_mdots_kg_s", "everything_ok", "expl_time_s", "weight_kg", "Ps_psi", "choke_time_s"])
-        for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, kg, bps, T_bf, CT in zip(sorted_x2, sorted_y2, sorted_Tcolors2, sorted_mdots2, sorted_fill_masses2, sorted_P_b1s2, sorted_Tb1s2, sorted_press_masses2, sorted_T_fs2, sorted_all_mdots2, sorted_expl_times2, sorted_part_nums2, sorted_COPV_ODs2, sorted_weights2, sorted_BPs2, sorted_T_bfs2, sorted_choke_times2):
+                         "mdot_total_max_kg_s", "all_mdots_kg_s", "everything_ok", "expl_time_s", "weight_kg", "Ps_psi", "choke_time_s"]) #T_sk?
+        for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, kg, bps, T_bf, CT in zip(sorted_x1, sorted_y1, sorted_Tcolors1, sorted_mdots1, sorted_fill_masses1, sorted_P_b1s1, sorted_Tb1s1, sorted_press_masses1, sorted_T_fs1, sorted_all_mdots1, sorted_expl_times, sorted_part_nums, sorted_COPV_ODs, sorted_weights, sorted_BPs, sorted_T_bfs, sorted_choke_times):
             writer.writerow([pn, od, px, P1, vy, T1, T_bf, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext, kg, bps, CT])
 
-csvname2 = f"{T_amb}K_Alsafe_upstream{D_orifice}in_transient.csv"
-output_dir2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
-os.makedirs(output_dir2, exist_ok=True)
-csvname2 = os.path.join(output_dir2, csvname2)
-with open(csvname2, "w", newline="") as f:
-    writer = csv.writer(f)
-    writer.writerow(["time_s", "P_b_psi", "T_b_K", "T_in_K", "mdot_total_kg_s", "mdot_choke_kg_s", "mdot_LOx_kg_s", "mdot_IPA_kg_s"])
-    for t, Pb, Tb, Tin, tot, lox, ipa, choke in zip(times1[12], BPs[12], BTs[12], Tins1[12], all_mdots1[12], LOx_mdots1[12], IPA_mdots1[12], choke_mdots1[12]):
-        writer.writerow([t, Pb, Tb, Tin, tot, choke, lox, ipa])
+    if x2:
+        csvname1 = f"{T_amb}K_downstream{D_orifice}in.csv"
+        output_dir1 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+        os.makedirs(output_dir1, exist_ok=True)
+        csvname1 = os.path.join(output_dir1, csvname1)
+        with open(csvname1, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["Part_num", "OD_in", "P_b0_psi", "P_b1_psi", "V_b_L", "T_b1_K", "T_bf_K", "T_f_K", "fill_mass_kg", "press_mass_kg", "mdot_LOx_max_kg_s", "mdot_IPA_max_kg_s",
+                            "mdot_total_max_kg_s", "all_mdots_kg_s", "everything_ok", "expl_time_s", "weight_kg", "Ps_psi", "choke_time_s"])
+            for px, vy, col, (lox, ipa, tot), fm, P1, T1, pm, T_f, amd, ext, pn, od, kg, bps, T_bf, CT in zip(sorted_x2, sorted_y2, sorted_Tcolors2, sorted_mdots2, sorted_fill_masses2, sorted_P_b1s2, sorted_Tb1s2, sorted_press_masses2, sorted_T_fs2, sorted_all_mdots2, sorted_expl_times2, sorted_part_nums2, sorted_COPV_ODs2, sorted_weights2, sorted_BPs2, sorted_T_bfs2, sorted_choke_times2):
+                writer.writerow([pn, od, px, P1, vy, T1, T_bf, T_f, fm, pm, lox, ipa, tot, amd, col == "lightgreen", ext, kg, bps, CT])
 
-if x2:
-    csvname3 = f"{T_amb}K_Alsafe_downstream{D_orifice}in_transient.csv"
-    output_dir3 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
-    os.makedirs(output_dir3, exist_ok=True)
-    csvname3 = os.path.join(output_dir3, csvname3)
-    with open(csvname3, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["time_s", "P_b_psi", "T_b_K", "T_in_K", "mdot_total_kg_s", "mdot_choke_kg_s", "mdot_LOx_kg_s", "mdot_IPA_kg_s"])
-        for t, Pb, Tb, Tin, tot, lox, ipa, choke in zip(times2[12], BPs2[12], BTs2[12], Tins2[12], all_mdots2[12], LOx_mdots2[12], IPA_mdots2[12], choke_mdots2[12]):
-            writer.writerow([t, Pb, Tb, Tin, tot, choke, lox, ipa])
+    def find_part(names, maker = "ALSAFE"): #index of the first bottle from this maker (lists are in CSV order minus skipped bottles)
+        for k, name in enumerate(names):
+            if name.upper().startswith(maker):
+                return k
+        print(f"No {maker} bottle in results, transient CSV skipped")
+        return None
 
-sc = ax[0,0].scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
-sc1 = ax[1,0].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
+    k_up = find_part(part_nums)
+    k_down = find_part(part_nums2) if x2 else None
 
-m_total = [mu + mp for mu, mp in zip(sorted_m_useds, sorted_press_masses)]
-P_grid = np.linspace(min(sorted_x)*0.95, max(sorted_x)*1.25, 80)
-V_grid = np.linspace(min(sorted_y)*0.95, V_max, 80)
-T_grid = np.full((len(V_grid), len(P_grid)), np.nan)
-for i, P in enumerate(P_grid):
-    S = propssi("S", "T", T_b0, "P", 6894.757*P, "nitrogen")
-    rho_0 = propssi("D", "T", T_b0, "P", 6894.757*P, "nitrogen")
-    rho_min = propssi("D", "S", S, "P", P_tmin, "nitrogen")
-    m_tot = np.interp(P, sorted_x, m_total)
-    for j, V in enumerate(V_grid):
-        rho_end = max(rho_0 - m_tot/(V/1000), rho_min)
-        T_grid[j,i] = propssi("T", "D", rho_end, "S", S, "nitrogen")
+    if k_up is not None:
+        csvname2 = f"{T_amb}K_Alsafe_upstream{D_orifice}in_transient.csv"
+        output_dir2 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+        os.makedirs(output_dir2, exist_ok=True)
+        csvname2 = os.path.join(output_dir2, csvname2)
+        with open(csvname2, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["time_s", "P_b_psi", "T_b_K", "T_in_K", "mdot_total_kg_s", "mdot_choke_kg_s", "mdot_LOx_kg_s", "mdot_IPA_kg_s"])
+            for t, Pb, Tb, Tin, tot, lox, ipa, choke_md in zip(times1[k_up], BPs[k_up], BTs[k_up], Tins1[k_up], all_mdots1[k_up], LOx_mdots1[k_up], IPA_mdots1[k_up], choke_mdots1[k_up]):
+                writer.writerow([t, Pb, Tb, Tin, tot, choke_md, lox, ipa])
 
-vmin, vmax = np.nanmin(T_grid), np.nanmax(T_grid)
-levels = np.linspace(vmin, vmax, 20)
+    if k_down is not None:
+        csvname3 = f"{T_amb}K_Alsafe_downstream{D_orifice}in_transient.csv"
+        output_dir3 = os.path.join(os.path.dirname(os.path.abspath(__file__)), "outputs")
+        os.makedirs(output_dir3, exist_ok=True)
+        csvname3 = os.path.join(output_dir3, csvname3)
+        with open(csvname3, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow(["time_s", "P_b_psi", "T_b_K", "T_in_K", "mdot_total_kg_s", "mdot_choke_kg_s", "mdot_LOx_kg_s", "mdot_IPA_kg_s"])
+            for t, Pb, Tb, Tin, tot, lox, ipa, choke_md in zip(times2[k_down], BPs2[k_down], BTs2[k_down], Tins2[k_down], all_mdots2[k_down], LOx_mdots2[k_down], IPA_mdots2[k_down], choke_mdots2[k_down]):
+                writer.writerow([t, Pb, Tb, Tin, tot, choke_md, lox, ipa])
 
-cf = ax[0,1].contourf(P_grid, V_grid, T_grid, levels=levels, cmap="viridis", zorder=0)
-ax[0,1].contour(P_grid, V_grid, T_grid, levels=[T_rating], colors="red", linewidths=1.5, zorder=2)
-fig.colorbar(cf, ax=ax[0,1], label = "T_f (K)")
-ax[0,1].plot(sorted_x, sorted_y, color = "gray", linestyle = "-", zorder = 3)
-sc2 = ax[0,1].scatter(sorted_x1, sorted_y1, c=sorted_Tcolors1, edgecolor = "white", linewidth = 1, s = 60, zorder = 4)
-ax[0,1].set_ylim(V_grid[0], V_max)
+    sc = ax[0,0].scatter(sorted_x, sorted_y, c = sorted_colors, zorder = 3)
+    sc1 = ax[1,0].scatter(sorted_y, sorted_Tfs, c= sorted_Tcolors, zorder = 3)
 
-if x2:
-    cf1 = ax[1,1].contourf(P_grid, V_grid, T_grid, levels=levels, cmap="viridis", zorder=0)
-    ax[1,1].contour(P_grid, V_grid, T_grid, levels=[T_rating], colors="red", linewidths=1.5, zorder=2)
-    fig.colorbar(cf, ax=ax[1,1], label = "T_f (K)")
-    ax[1,1].plot(sorted_x, sorted_y, color = "gray", linestyle = "-", zorder = 3)
-    sc3 = ax[1,1].scatter(sorted_x2, sorted_y2, c=sorted_Tcolors2, edgecolor = "white", linewidth = 1, s = 60, zorder = 4)
-    ax[1,1].set_ylim(V_grid[0], V_max)
+    m_total = [mu + mp for mu, mp in zip(sorted_m_useds, sorted_press_masses)]
+    P_grid = np.linspace(min(sorted_x)*0.95, max(sorted_x)*1.25, 80)
+    V_grid = np.linspace(min(sorted_y)*0.95, V_max, 80)
+    T_grid = np.full((len(V_grid), len(P_grid)), np.nan)
+    for i, P in enumerate(P_grid):
+        S = propssi("S", "T", T_b0, "P", 6894.757*P, "nitrogen")
+        rho_0 = propssi("D", "T", T_b0, "P", 6894.757*P, "nitrogen")
+        rho_min = propssi("D", "S", S, "P", P_tmin, "nitrogen")
+        m_tot = np.interp(P, sorted_x, m_total)
+        for j, V in enumerate(V_grid):
+            rho_end = max(rho_0 - m_tot/(V/1000), rho_min)
+            T_grid[j,i] = N2_DS(rho_end, S).T()
 
-fig.suptitle(f"GN2 COPV blowdown sizing {T_amb}K T_amb", fontsize = 13, fontweight = "bold")
-ax[0,0].set_title(f"Bottle volume vs fill pressure for 10 second burn\nblue = P_tmin reached, red = P_tmin not reached", fontsize = 10)
-ax[1,0].set_title(f"Burn end temperature vs bottle volume\nblue = above COPV rated temp, red = below COPV rated temp", fontsize = 10)
-ax[0,1].set_title(f"COPV options on temperature map orifice upstream\nred line = {T_rating}K, gray line = 10s burn, green = ok, salmon = not ok", fontsize = 10)
-if x2:
-    ax[1,1].set_title(f"COPV options on temperature map orifice downstream")
+    vmin, vmax = np.nanmin(T_grid), np.nanmax(T_grid)
+    levels = np.linspace(vmin, vmax, 20)
 
-# params = (
-#     f"Run parameters\n"
-#     f"T_amb         {T_amb:.2f}K\n"
-#     f"T_b0          {T_b0:.2f}K\n"
-#     f"depl_time     {depl_time:.2f}s\n"
-#     f"P_t           {P_t/6894.757:.0f}psi\n"
-#     f"P_tmin        {P_tmin/6894.757:.0f}psi\n"
-#     f"LOx CF        {CF}\n" #come back here
-#     f"V_utotal      {V_utotal*1000:.2f}L\n"
-# )
-# ax[1,1].text(0.02, 0.98, params, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
+    cf = ax[0,1].contourf(P_grid, V_grid, T_grid, levels=levels, cmap="viridis", zorder=0)
+    ax[0,1].contour(P_grid, V_grid, T_grid, levels=[T_rating], colors="red", linewidths=1.5, zorder=2)
+    fig.colorbar(cf, ax=ax[0,1], label = "T_f (K)")
+    ax[0,1].plot(sorted_x, sorted_y, color = "gray", linestyle = "-", zorder = 3)
+    sc2 = ax[0,1].scatter(sorted_x1, sorted_y1, c=sorted_Tcolors1, edgecolor = "white", linewidth = 1, s = 60, zorder = 4)
+    ax[0,1].set_ylim(V_grid[0], V_max)
 
-cursor1 = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
-@cursor1.connect("add")
-def on_add(sel):
-    LOx, IPA, total = sorted_mdots[sel.index]
-    P = sorted_x[sel.index]
-    P1 = sorted_Pb1s[sel.index]
-    V = sorted_y[sel.index]
-    T1 = sorted_Tb1s[sel.index]
-    TF = sorted_Tfs[sel.index]
-    FM = sorted_fill_masses[sel.index]
-    PM = sorted_press_masses[sel.index]
-    sel.annotation.set_text(f"{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K burn end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total")
-    sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+    if x2:
+        cf1 = ax[1,1].contourf(P_grid, V_grid, T_grid, levels=levels, cmap="viridis", zorder=0)
+        ax[1,1].contour(P_grid, V_grid, T_grid, levels=[T_rating], colors="red", linewidths=1.5, zorder=2)
+        fig.colorbar(cf, ax=ax[1,1], label = "T_f (K)")
+        ax[1,1].plot(sorted_x, sorted_y, color = "gray", linestyle = "-", zorder = 3)
+        sc3 = ax[1,1].scatter(sorted_x2, sorted_y2, c=sorted_Tcolors2, edgecolor = "white", linewidth = 1, s = 60, zorder = 4)
+        ax[1,1].set_ylim(V_grid[0], V_max)
 
-cursor2 = mplcursors.cursor(sc1, hover=mplcursors.HoverMode.Transient)
-@cursor2.connect("add")
-def on_add(sel):
-    V = sorted_y[sel.index]
-    TF = sorted_Tfs[sel.index]
-    sel.annotation.set_text(f"{V:.2f} L tank\n{TF:.3f}K final temp")
-    sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+    fig.suptitle(f"GN2 COPV blowdown sizing {T_amb}K T_amb", fontsize = 13, fontweight = "bold")
+    ax[0,0].set_title(f"Bottle volume vs fill pressure for 10 second burn\nblue = P_tmin reached, red = P_tmin not reached", fontsize = 10)
+    ax[1,0].set_title(f"Burn end temperature vs bottle volume\nblue = above COPV rated temp, red = below COPV rated temp", fontsize = 10)
+    ax[0,1].set_title(f"COPV options on temperature map orifice upstream\nred line = {T_rating}K, gray line = 10s burn, green = ok, salmon = not ok", fontsize = 10)
+    if x2:
+        ax[1,1].set_title(f"COPV options on temperature map orifice downstream")
 
-cursor3 = mplcursors.cursor(sc2, hover=mplcursors.HoverMode.Transient)
-@cursor3.connect("add")
-def on_add(sel):
-    name = sorted_part_nums[sel.index]
-    OD = sorted_COPV_ODs[sel.index]
-    LOx, IPA, total = sorted_mdots1[sel.index]
-    P = sorted_x1[sel.index]
-    V = sorted_y1[sel.index]
-    TF = sorted_T_fs1[sel.index]
-    EX = sorted_excesses[sel.index]
-    T = sorted_expl_times[sel.index]
-    stat = sorted_statuses[sel.index]
-    Tbf = sorted_T_bfs[sel.index]
-    sel.annotation.set_text(f"{name}\n{OD:.3f} in OD\n{V:.2f} L tank\nstatus: {stat}\n{P:.0f} psi full\n{Tbf:.0f}K burn end\n{TF:.0f}K expulsion end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total\n{T:.3f}s expulsion time\n{EX:.3f}kg excess mass")
-    sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+    # params = (
+    #     f"Run parameters\n"
+    #     f"T_amb         {T_amb:.2f}K\n"
+    #     f"T_b0          {T_b0:.2f}K\n"
+    #     f"depl_time     {depl_time:.2f}s\n"
+    #     f"P_t           {P_t/6894.757:.0f}psi\n"
+    #     f"P_tmin        {P_tmin/6894.757:.0f}psi\n"
+    #     f"LOx CF        {CF}\n" #come back here
+    #     f"V_utotal      {V_utotal*1000:.2f}L\n"
+    # )
+    # ax[1,1].text(0.02, 0.98, params, transform=ax[1,1].transAxes, va="top", ha="left", family="monospace", fontsize=10)
 
-if x2:
-    cursor4 = mplcursors.cursor(sc3, hover=mplcursors.HoverMode.Transient)
-    @cursor4.connect("add")
+    cursor1 = mplcursors.cursor(sc, hover=mplcursors.HoverMode.Transient)
+    @cursor1.connect("add")
     def on_add(sel):
-        name = sorted_part_nums2[sel.index]
-        OD = sorted_COPV_ODs2[sel.index]
-        LOx, IPA, total = sorted_mdots2[sel.index]
-        P = sorted_x2[sel.index]
-        V = sorted_y2[sel.index]
-        TF = sorted_T_fs2[sel.index]
-        EX = sorted_excesses2[sel.index]
-        T = sorted_expl_times2[sel.index]
-        stat = sorted_statuses2[sel.index]
-        Tbf = sorted_T_bfs2[sel.index]
+        LOx, IPA, total = sorted_mdots[sel.index]
+        P = sorted_x[sel.index]
+        P1 = sorted_Pb1s[sel.index]
+        V = sorted_y[sel.index]
+        T1 = sorted_Tb1s[sel.index]
+        TF = sorted_Tfs[sel.index]
+        FM = sorted_fill_masses[sel.index]
+        PM = sorted_press_masses[sel.index]
+        sel.annotation.set_text(f"{V:.2f} L tank\n{FM:.3f} kg fill mass\n{PM:.3f} kg press mass\n{P:.0f} psi full\n{P1:.0f} psi burn start\n{T1:.0f}K burn start\n{TF:.0f}K burn end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total")
+        sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+
+    cursor2 = mplcursors.cursor(sc1, hover=mplcursors.HoverMode.Transient)
+    @cursor2.connect("add")
+    def on_add(sel):
+        V = sorted_y[sel.index]
+        TF = sorted_Tfs[sel.index]
+        sel.annotation.set_text(f"{V:.2f} L tank\n{TF:.3f}K final temp")
+        sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+
+    cursor3 = mplcursors.cursor(sc2, hover=mplcursors.HoverMode.Transient)
+    @cursor3.connect("add")
+    def on_add(sel):
+        name = sorted_part_nums[sel.index]
+        OD = sorted_COPV_ODs[sel.index]
+        LOx, IPA, total = sorted_mdots1[sel.index]
+        P = sorted_x1[sel.index]
+        V = sorted_y1[sel.index]
+        TF = sorted_T_fs1[sel.index]
+        EX = sorted_excesses[sel.index]
+        T = sorted_expl_times[sel.index]
+        stat = sorted_statuses[sel.index]
+        Tbf = sorted_T_bfs[sel.index]
         sel.annotation.set_text(f"{name}\n{OD:.3f} in OD\n{V:.2f} L tank\nstatus: {stat}\n{P:.0f} psi full\n{Tbf:.0f}K burn end\n{TF:.0f}K expulsion end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total\n{T:.3f}s expulsion time\n{EX:.3f}kg excess mass")
         sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
 
-plt.show()
+    if x2:
+        cursor4 = mplcursors.cursor(sc3, hover=mplcursors.HoverMode.Transient)
+        @cursor4.connect("add")
+        def on_add(sel):
+            name = sorted_part_nums2[sel.index]
+            OD = sorted_COPV_ODs2[sel.index]
+            LOx, IPA, total = sorted_mdots2[sel.index]
+            P = sorted_x2[sel.index]
+            V = sorted_y2[sel.index]
+            TF = sorted_T_fs2[sel.index]
+            EX = sorted_excesses2[sel.index]
+            T = sorted_expl_times2[sel.index]
+            stat = sorted_statuses2[sel.index]
+            Tbf = sorted_T_bfs2[sel.index]
+            sel.annotation.set_text(f"{name}\n{OD:.3f} in OD\n{V:.2f} L tank\nstatus: {stat}\n{P:.0f} psi full\n{Tbf:.0f}K burn end\n{TF:.0f}K expulsion end\n{LOx:.3f} kg/s LOx\n{IPA:.3f} kg/s IPA\n{total:.3f} kg/s total\n{T:.3f}s expulsion time\n{EX:.3f}kg excess mass")
+            sel.annotation.get_bbox_patch().set(fc="lightgreen", alpha=1)
+
+    plt.show()
