@@ -115,7 +115,7 @@ P_set = 550*6894.757 #adjust: regulator setpoint
 P_ullage_min = 3.4 * 10**6
 P_ullage_max = 750*6894.757
 
-D_orifice = 0.141 #in adjust: orifice diameter
+D_orifice = 0.213 #in adjust: orifice diameter
 A_orifice = ((D_orifice*0.0254/2)**2)*3.141592
 C_d = 0.62 #flow coefficient, check api 520/521
 A_orifice_eff = A_orifice * C_d
@@ -406,6 +406,7 @@ def use_bottle(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? c
             min_choke_ratio = min(choke_ratio, min_choke_ratio)
             if (choke_ratio < 1):
                 t_choke = time
+                print(f"Orifice choked at {time:.3f}s and ratio {choke_ratio}")
                 break
             mdot_capped = mdot_total
             P_throat, v_throat = solve_throatP(A_orifice_eff, h_b, mdot_capped, S, sonicP, P_b)
@@ -413,7 +414,7 @@ def use_bottle(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? c
             P_inreg = solve_recovery(LA, mdot_capped, P_throat, v_throat, h_b, P_b)
         except ThroatCondenses:
             t_choke = time
-            print(f"Orifice choked at {time:.3f}s and P_b {P_b/6894.757:.0f} psi")
+            print(f"Orifice condensed at {time:.3f}s and P_b {P_b/6894.757:.0f} psi")
             break
         except ValueError as e:
             print(f"Orifice failed at {time:.3f}s and P_b {P_b/6894.757:.0f} psi: {e}")
@@ -479,7 +480,6 @@ def use_bottle(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? c
         "mdots_IPA":mdots_IPA,
         "time":time,
         "times":times,
-        "t_choke":t_choke
         }
     return output
 
@@ -658,7 +658,6 @@ def use_bottle1(P_b0, V_b): #come back here for orifice (mdot_reg < mdot_total? 
         "mdots_choke":mdots_choke,
         "time":time,
         "times":times,
-        "t_choke":t_choke
         }
     return output
 
@@ -822,6 +821,7 @@ ODs = readCSV(filename, "Diameter (in)")
 mans = readCSV(filename, "Company")
 weights = readCSV(filename, "Weight (kg)")
 
+
 for P_psi, V_L, partnum, OD, man, weight in zip(P_candidates, V_candidates, partnums, ODs, mans, weights, strict=True):
     if float(V_L) > V_max:
         continue
@@ -829,12 +829,21 @@ for P_psi, V_L, partnum, OD, man, weight in zip(P_candidates, V_candidates, part
     P_psi = P_psi.replace(",", "")
     P_psi = float(P_psi)*6894.757
     print("---------------------------------------------------------------------------------------")
-    print(f"{man} {partnum}\n")
+    print(f"{man} {partnum} upstream\n")
     try:
         P_fill, status = solve_fill_up(V_b, P_psi)# come back here for solver
         usebottle(P_fill, V_b, partnum, float(OD), man, status, weight)
     except (ValueError, ThroatCondenses) as e:
         print(f"{man} {partnum} skipped: {e}")
+
+for P_psi, V_L, partnum, OD, man, weight in zip(P_candidates, V_candidates, partnums, ODs, mans, weights, strict=True):
+    if float(V_L) > V_max:
+        continue
+    V_b = float(V_L)/1000
+    P_psi = P_psi.replace(",", "")
+    P_psi = float(P_psi)*6894.757
+    print("---------------------------------------------------------------------------------------")
+    print(f"{man} {partnum} downstream\n")
     try:
         P_fill_down, status_down = solve_fill_down(V_b, P_psi)
         usebottle1(P_fill_down, V_b, partnum, float(OD), man, status_down, weight)
